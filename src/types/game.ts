@@ -14,7 +14,8 @@ export type ProjectileKind =
   | 'plasma'
   | 'grenade'
   | 'laser'
-  | 'slime_acid';
+  | 'slime_acid'
+  | 'scythe';
 
 export interface WeaponDefinition {
   id: WeaponId;
@@ -48,6 +49,7 @@ export type SlimeVariant =
   | 'magma'
   | 'mini_magma'
   | 'volatile'
+  | 'reaper'
   | 'king';
 
 export interface ZoneHazard {
@@ -111,6 +113,8 @@ export interface Projectile {
   id: number;
   kind: ProjectileKind;
   fromEnemy?: boolean;
+  debuff?: 'bleed_slow';
+  spinAngle?: number;
   x: number;
   y: number;
   vx: number;
@@ -213,4 +217,5 @@ export interface HudSnapshot {
     maxHp: number;
   } | null;
   slimesRemaining: number;
+  bleedRemaining: number;
 }

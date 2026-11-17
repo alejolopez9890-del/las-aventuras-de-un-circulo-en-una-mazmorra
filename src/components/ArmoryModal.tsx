@@ -28,9 +28,10 @@ export function ArmoryModal({
   onBuyMedkit,
   onUpgradeSpeed,
 }: ArmoryModalProps) {
-  const { stats, weapons, activeWeapon } = hud;
+  const { stats, weapons, activeWeapon, bleedRemaining } = hud;
   const medkitCost = MEDKIT_COST;
-  const canHeal = stats.hp < stats.maxHp && stats.coins >= medkitCost;
+  const isBleeding = bleedRemaining > 0;
+  const canHeal = !isBleeding && stats.hp < stats.maxHp && stats.coins >= medkitCost;
   const speedLvl = stats.speedUpgradeLevel;
   const isMaxSpeed = speedLvl >= SPEED_UPGRADE_MAX_LEVEL;
   const speedCost = getSpeedUpgradeCost(speedLvl);
@@ -76,10 +77,18 @@ export function ArmoryModal({
                 <div>
                   <h3 className="text-sm font-semibold text-white">Botiquín de Campo</h3>
                   <p className="text-xs text-slate-400">
-                    Restaura +45 HP · Actual:{' '}
-                    <span className="font-mono tabular-nums text-slate-200">
-                      {Math.ceil(stats.hp)}/{stats.maxHp}
-                    </span>
+                    {isBleeding ? (
+                      <span className="text-red-400 font-medium">
+                        Bloqueado por desangrado ({bleedRemaining.toFixed(1)}s)
+                      </span>
+                    ) : (
+                      <>
+                        Restaura +45 HP · Actual:{' '}
+                        <span className="font-mono tabular-nums text-slate-200">
+                          {Math.ceil(stats.hp)}/{stats.maxHp}
+                        </span>
+                      </>
+                    )}
                   </p>
                 </div>
               </div>
@@ -94,7 +103,7 @@ export function ArmoryModal({
                     : 'bg-slate-800 text-slate-500 cursor-not-allowed'
                 }`}
               >
-                <span>Curar (+45 HP)</span>
+                <span>{isBleeding ? 'Sin curación' : 'Curar (+45 HP)'}</span>
                 <span aria-hidden="true">·</span>
                 <span className="font-mono tabular-nums">{medkitCost} monedas</span>
               </button>

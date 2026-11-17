@@ -22,9 +22,10 @@ export function HudBar({
   onTogglePause,
   onOpenArmory,
 }: HudBarProps) {
-  const { stats, bossInfo, slimesRemaining } = hud;
+  const { stats, bossInfo, slimesRemaining, bleedRemaining } = hud;
   const hpPct = Math.max(0, Math.min(100, (stats.hp / stats.maxHp) * 100));
   const xpPct = Math.max(0, Math.min(100, (stats.xp / stats.xpToNext) * 100));
+  const isBleeding = bleedRemaining > 0;
 
   return (
     <div className="pointer-events-none fixed inset-x-0 top-0 z-20 flex flex-col items-center gap-2 p-3 sm:p-4">
@@ -34,7 +35,9 @@ export function HudBar({
           {/* Health */}
           <div className="flex flex-col gap-1 min-w-[148px]">
             <div className="flex items-center justify-between text-xs font-medium text-slate-300">
-              <span>Salud</span>
+              <span className={isBleeding ? 'text-red-400 font-semibold' : ''}>
+                {isBleeding ? 'Desangrado' : 'Salud'}
+              </span>
               <span className="font-mono tabular-nums text-slate-100">
                 {Math.ceil(stats.hp)}/{stats.maxHp}
               </span>
@@ -42,7 +45,11 @@ export function HudBar({
             <div className="h-2.5 w-full overflow-hidden rounded bg-slate-800">
               <div
                 className={`h-full transition-all duration-150 ${
-                  hpPct > 35 ? 'bg-rose-500' : 'bg-red-600'
+                  isBleeding
+                    ? 'bg-red-600 animate-pulse'
+                    : hpPct > 35
+                      ? 'bg-rose-500'
+                      : 'bg-red-600'
                 }`}
                 style={{ width: `${hpPct}%` }}
               />
@@ -82,7 +89,7 @@ export function HudBar({
             ·
           </span>
           <div className="hidden sm:block font-mono tabular-nums whitespace-nowrap text-slate-400">
-            Slimes <span className="text-slate-200">{slimesRemaining}</span>
+            Enemigos <span className="text-slate-200">{slimesRemaining}</span>
           </div>
           <span aria-hidden="true" className="text-slate-600 hidden md:inline">
             ·
@@ -136,6 +143,27 @@ export function HudBar({
           </button>
         </div>
       </header>
+
+      {/* Active Scythe Bleed & Slow Debuff Alert */}
+      {isBleeding && (
+        <div className="flex items-center gap-3 rounded-lg border border-red-500/60 bg-red-950/85 px-4 py-1.5 text-xs font-semibold text-red-200 shadow-md backdrop-blur-sm">
+          <span>Hemorragia por Hoz</span>
+          <span aria-hidden="true" className="text-red-400/70">
+            ·
+          </span>
+          <span>Velocidad -50%</span>
+          <span aria-hidden="true" className="text-red-400/70">
+            ·
+          </span>
+          <span>Sin curación</span>
+          <span aria-hidden="true" className="text-red-400/70">
+            ·
+          </span>
+          <span className="font-mono tabular-nums text-red-100">
+            {bleedRemaining.toFixed(1)}s
+          </span>
+        </div>
+      )}
 
       {/* Boss Health Bar */}
       {bossInfo && (

@@ -38,6 +38,7 @@ const INITIAL_HUD: HudSnapshot = {
   dashCooldownRatio: 0,
   bossInfo: null,
   slimesRemaining: 0,
+  bleedRemaining: 0,
 };
 
 function pickThreeUpgrades(): LevelUpUpgrade[] {
@@ -199,9 +200,9 @@ export default function App() {
             </div>
 
             <p className="mt-3 text-sm sm:text-base leading-relaxed text-slate-300 max-w-xl">
-              Enfréntate a hordas de slimes tenebrosos con un jefe cada 2 oleadas, cada vez más
-              letal. Al desvanecerse sueltan pocas monedas y experiencia: administra tu botín para
-              subir de nivel y costear las armas más poderosas.
+              Enfréntate a hordas de slimes tenebrosos, esqueletos segadores con hoces letales y un
+              jefe cada 2 oleadas. Al caer sueltan pocas monedas y experiencia: administra tu botín
+              para subir de nivel y costear las armas más poderosas.
             </p>
 
             {/* Controls & Arsenal Summary */}

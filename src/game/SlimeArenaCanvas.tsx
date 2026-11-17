@@ -195,6 +195,9 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         dashDirY: 0,
         recoilOffset: 0,
         walkPhase: 0,
+        bleedTimer: 0,
+        bleedTickTimer: 0,
+        bleedWarnCooldown: 0,
       },
       stats: createInitialStats(),
       activeWeapon: 'pistol' as WeaponId,
@@ -252,16 +255,22 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
       }
 
       for (let i = 0; i < count; i++) {
+        if (wave === 1 && (i === 5 || i === 11)) {
+          queue.push('reaper');
+          continue;
+        }
         const roll = Math.random();
         if (wave >= 2 && roll < 0.14) {
+          queue.push('reaper');
+        } else if (wave >= 2 && roll < 0.26) {
           queue.push('volatile');
-        } else if (wave >= 3 && roll < 0.28) {
+        } else if (wave >= 3 && roll < 0.38) {
           queue.push('magma');
-        } else if (wave >= 2 && roll < 0.34) {
+        } else if (wave >= 2 && roll < 0.44) {
           queue.push('gold');
-        } else if (wave >= 2 && roll < 0.54) {
+        } else if (wave >= 2 && roll < 0.62) {
           queue.push('purple');
-        } else if (wave >= 2 && roll < 0.78) {
+        } else if (wave >= 2 && roll < 0.82) {
           queue.push('blue');
         } else if (wave === 1 && roll < 0.35) {
           queue.push('blue');
@@ -427,6 +436,18 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           highlight: '#FDE047',
           core: '#450A0A',
         },
+        reaper: {
+          radius: 22,
+          hp: 76,
+          speed: 138,
+          damage: 18,
+          coins: 4,
+          xp: 16,
+          score: 85,
+          color: '#1E293B',
+          highlight: '#E2E8F0',
+          core: '#7F1D1D',
+        },
         king: {
           radius: 50 + Math.min(20, bossTier * 3),
           hp: 520 + bossTier * 390,
@@ -468,7 +489,11 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         dying: false,
         dissolveTimer: 0,
         dissolveDuration: d.isBoss ? 0.85 : 0.45,
-        attackCooldown: d.isBoss ? 1.2 : 2.5 + Math.random() * 1.4,
+        attackCooldown: d.isBoss
+          ? 1.2
+          : variant === 'reaper'
+            ? 1.5 + Math.random() * 0.8
+            : 2.5 + Math.random() * 1.4,
         summonCooldown: d.isBoss ? 4.8 : undefined,
         isBoss: d.isBoss,
         bossTier: d.isBoss ? bossTier : undefined,
@@ -502,6 +527,7 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           : null,
         slimesRemaining:
           eng.slimes.filter((s) => !s.dying).length + eng.waveState.toSpawn.length,
+        bleedRemaining: Math.max(0, eng.player.bleedTimer),
       });
     };
 
@@ -521,6 +547,9 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         dashDirY: 0,
         recoilOffset: 0,
         walkPhase: 0,
+        bleedTimer: 0,
+        bleedTickTimer: 0,
+        bleedWarnCooldown: 0,
       };
       eng.stats = createInitialStats();
       eng.activeWeapon = 'pistol';
@@ -587,7 +616,13 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
       buyMedkit: () => {
         const eng = engineRef.current;
         const cost = MEDKIT_COST;
-        if (eng.stats.coins < cost || eng.stats.hp >= eng.stats.maxHp) return false;
+        if (
+          eng.player.bleedTimer > 0 ||
+          eng.stats.coins < cost ||
+          eng.stats.hp >= eng.stats.maxHp
+        ) {
+          return false;
+        }
         eng.stats.coins -= cost;
         eng.stats.hp = Math.min(eng.stats.maxHp, eng.stats.hp + 45);
         soundEngine.playXp();
@@ -612,7 +647,9 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         const s = eng.stats;
         if (upgradeId === 'vitality') {
           s.maxHp += 25;
-          s.hp = Math.min(s.maxHp, s.hp + 35);
+          if (eng.player.bleedTimer <= 0) {
+            s.hp = Math.min(s.maxHp, s.hp + 35);
+          }
         } else if (upgradeId === 'heavy_rounds') {
           s.damageMultiplier += 0.18;
         } else if (upgradeId === 'rapid_trigger') {
@@ -874,17 +911,27 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         for (let i = 0; i < gooCount; i++) {
           const ang = Math.random() * Math.PI * 2;
           const spd = 55 + Math.random() * (slime.isBoss ? 260 : 155);
+          const particleColor =
+            slime.variant === 'reaper'
+              ? i % 3 === 0
+                ? '#E2E8F0'
+                : i % 2 === 0
+                  ? '#EF4444'
+                  : '#334155'
+              : i % 3 === 0
+                ? slime.highlightColor
+                : slime.color;
           eng.particles.push({
             x: slime.x,
             y: slime.y,
             vx: Math.cos(ang) * spd,
             vy: Math.sin(ang) * spd,
             radius: 3 + Math.random() * (slime.radius * 0.3),
-            color: i % 3 === 0 ? slime.highlightColor : slime.color,
+            color: particleColor,
             alpha: 0.95,
             life: 0.38 + Math.random() * 0.38,
             maxLife: 0.76,
-            kind: 'goo',
+            kind: slime.variant === 'reaper' && i % 2 === 1 ? 'smoke' : 'goo',
           });
         }
 
@@ -1162,10 +1209,43 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         if (p.invulnTimer > 0) p.invulnTimer -= dt;
         if (p.hurtFlash > 0) p.hurtFlash -= dt;
         if (p.dashCooldown > 0) p.dashCooldown -= dt;
+        if (p.bleedWarnCooldown > 0) p.bleedWarnCooldown -= dt;
         if (p.recoilOffset > 0) p.recoilOffset = Math.max(0, p.recoilOffset - dt * 32);
         if (eng.fireTimerMs > 0) eng.fireTimerMs -= dt * 1000;
         if (eng.camera.shake > 0) eng.camera.shake = Math.max(0, eng.camera.shake - dt * 28);
         if (eng.waveState.bannerTimer > 0) eng.waveState.bannerTimer -= dt;
+
+        // Bleeding debuff (50% speed reduction + no regeneration + periodic blood loss)
+        if (p.bleedTimer > 0) {
+          p.bleedTimer = Math.max(0, p.bleedTimer - dt);
+          p.bleedTickTimer -= dt;
+          if (Math.random() < 0.35) {
+            eng.particles.push({
+              x: p.x + (Math.random() - 0.5) * 18,
+              y: p.y + (Math.random() - 0.5) * 18,
+              vx: (Math.random() - 0.5) * 28,
+              vy: 18 + Math.random() * 35,
+              radius: 2.2 + Math.random() * 1.8,
+              color: '#DC2626',
+              alpha: 0.9,
+              life: 0.38,
+              maxLife: 0.38,
+              kind: 'goo',
+            });
+          }
+          if (p.bleedTickTimer <= 0) {
+            p.bleedTickTimer = 1.0;
+            const bleedDmg = 3;
+            eng.stats.hp = Math.max(0, eng.stats.hp - bleedDmg);
+            p.hurtFlash = Math.max(p.hurtFlash, 0.14);
+            addFloatingText(p.x, p.y - 24, `-${bleedDmg} Desangrado`, '#DC2626', 0.95);
+            if (eng.stats.hp <= 0) {
+              emitHudSnapshot();
+              onGameOver({ ...eng.stats });
+              return;
+            }
+          }
+        }
 
         // Reload progression for active weapon
         const activeDef = WEAPONS[eng.activeWeapon];
@@ -1181,17 +1261,18 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         }
 
         // Player Movement
+        const bleedSlow = p.bleedTimer > 0 ? 0.5 : 1;
         if (p.dashTimer > 0) {
           p.dashTimer -= dt;
-          p.x += p.dashDirX * DASH_SPEED * dt;
-          p.y += p.dashDirY * DASH_SPEED * dt;
+          p.x += p.dashDirX * DASH_SPEED * bleedSlow * dt;
+          p.y += p.dashDirY * DASH_SPEED * bleedSlow * dt;
           eng.particles.push({
             x: p.x,
             y: p.y,
             vx: 0,
             vy: 0,
             radius: PLAYER_RADIUS * 0.75,
-            color: '#38BDF8',
+            color: p.bleedTimer > 0 ? '#EF4444' : '#38BDF8',
             alpha: 0.35,
             life: 0.16,
             maxLife: 0.16,
@@ -1209,10 +1290,10 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             const len = Math.hypot(moveX, moveY);
             moveX /= len;
             moveY /= len;
-            p.walkPhase += dt * 11;
+            p.walkPhase += dt * (p.bleedTimer > 0 ? 6 : 11);
           }
 
-          const speed = BASE_PLAYER_SPEED * eng.stats.speedMultiplier;
+          const speed = BASE_PLAYER_SPEED * eng.stats.speedMultiplier * bleedSlow;
           p.x += moveX * speed * dt;
           p.y += moveY * speed * dt;
         }
@@ -1415,8 +1496,24 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           proj.distanceTraveled += Math.hypot(stepX, stepY);
           proj.lifeTimer -= dt;
 
-          // Trail particles for plasma/grenade
-          if (proj.kind === 'plasma' && Math.random() < 0.55) {
+          // Trail particles for plasma/grenade/scythe
+          if (proj.kind === 'scythe') {
+            proj.spinAngle = (proj.spinAngle ?? 0) + dt * 17;
+            if (Math.random() < 0.75) {
+              eng.particles.push({
+                x: proj.x + (Math.random() - 0.5) * 10,
+                y: proj.y + (Math.random() - 0.5) * 10,
+                vx: (Math.random() - 0.5) * 45,
+                vy: (Math.random() - 0.5) * 45,
+                radius: 2.2,
+                color: '#EF4444',
+                alpha: 0.75,
+                life: 0.18,
+                maxLife: 0.18,
+                kind: 'spark',
+              });
+            }
+          } else if (proj.kind === 'plasma' && Math.random() < 0.55) {
             eng.particles.push({
               x: proj.x,
               y: proj.y,
@@ -1458,10 +1555,40 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
               if (distP <= proj.radius + PLAYER_RADIUS) {
                 eng.stats.hp = Math.max(0, eng.stats.hp - proj.damage);
                 p.invulnTimer = 0.55;
-                p.hurtFlash = 0.25;
+                p.hurtFlash = 0.28;
                 eng.camera.shake = Math.min(12, eng.camera.shake + 6);
                 soundEngine.playHurt();
-                addFloatingText(p.x, p.y - 24, `-${proj.damage}`, '#EF4444', 1.1);
+
+                if (proj.debuff === 'bleed_slow' || proj.kind === 'scythe') {
+                  p.bleedTimer = 5.0;
+                  p.bleedTickTimer = 1.0;
+                  addFloatingText(
+                    p.x,
+                    p.y - 34,
+                    `-${proj.damage} ¡HOZ! -50% Vel · Desangrado 5s`,
+                    '#DC2626',
+                    1.15
+                  );
+                  for (let k = 0; k < 14; k++) {
+                    const ang = Math.random() * Math.PI * 2;
+                    const spd = 60 + Math.random() * 140;
+                    eng.particles.push({
+                      x: p.x,
+                      y: p.y,
+                      vx: Math.cos(ang) * spd,
+                      vy: Math.sin(ang) * spd,
+                      radius: 2.5 + Math.random() * 2.5,
+                      color: k % 2 === 0 ? '#DC2626' : '#FCA5A5',
+                      alpha: 0.95,
+                      life: 0.35,
+                      maxLife: 0.35,
+                      kind: 'goo',
+                    });
+                  }
+                } else {
+                  addFloatingText(p.x, p.y - 24, `-${proj.damage}`, '#EF4444', 1.1);
+                }
+
                 remove = true;
                 if (eng.stats.hp <= 0) {
                   emitHudSnapshot();
@@ -1555,7 +1682,7 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             }
           }
 
-          // Gold treasure slime weaves laterally when player gets close
+          // Movement direction (gold weaves, reaper kites/strafes at scythe range)
           let dirX = dx / dist;
           let dirY = dy / dist;
           if (s.variant === 'gold' && dist < 240) {
@@ -1564,6 +1691,29 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             const dLen = Math.hypot(dirX, dirY) || 1;
             dirX /= dLen;
             dirY /= dLen;
+          } else if (s.variant === 'reaper') {
+            if (dist < 175) {
+              dirX = -dx / dist;
+              dirY = -dy / dist;
+            } else if (dist < 320) {
+              const strafeSign = s.id % 2 === 0 ? 1 : -1;
+              dirX = (-dy / dist) * strafeSign;
+              dirY = (dx / dist) * strafeSign;
+            }
+            if (Math.random() < 0.22) {
+              eng.particles.push({
+                x: s.x + (Math.random() - 0.5) * 14,
+                y: s.y + s.radius * 0.6,
+                vx: (Math.random() - 0.5) * 18,
+                vy: -14 - Math.random() * 18,
+                radius: 3.5,
+                color: '#1E293B',
+                alpha: 0.45,
+                life: 0.36,
+                maxLife: 0.36,
+                kind: 'smoke',
+              });
+            }
           }
 
           let moveSpeed = s.speed;
@@ -1600,6 +1750,39 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
 
           s.x = Math.max(s.radius + 16, Math.min(WORLD_WIDTH - s.radius - 16, s.x));
           s.y = Math.max(s.radius + 16, Math.min(WORLD_HEIGHT - s.radius - 16, s.y));
+
+          // Grim Reaper skeleton throws spinning scythe that slows 50% and inflicts 5s unhealable bleed
+          if (s.variant === 'reaper' && dist < 560) {
+            s.attackCooldown -= dt;
+            if (s.attackCooldown <= 0) {
+              s.attackCooldown = Math.max(1.85, 2.85 - eng.stats.wave * 0.08);
+              const ang = Math.atan2(p.y - s.y, p.x - s.x);
+              const scytheSpeed = 335 + Math.min(85, eng.stats.wave * 8);
+              eng.projectiles.push({
+                id: eng.nextEntityId++,
+                kind: 'scythe',
+                fromEnemy: true,
+                debuff: 'bleed_slow',
+                spinAngle: 0,
+                x: s.x + Math.cos(ang) * (s.radius + 6),
+                y: s.y + Math.sin(ang) * (s.radius + 6),
+                prevX: s.x,
+                prevY: s.y,
+                vx: Math.cos(ang) * scytheSpeed,
+                vy: Math.sin(ang) * scytheSpeed,
+                radius: 13,
+                damage: 14 + Math.min(10, eng.stats.wave),
+                color: '#E2E8F0',
+                trailColor: '#EF4444',
+                pierceLeft: 0,
+                hitIds: new Set<number>(),
+                explosionRadius: 0,
+                distanceTraveled: 0,
+                maxRange: 640,
+                lifeTimer: 2.2,
+              });
+            }
+          }
 
           // Purple elite slimes lob occasional toxic orb from wave 3+
           if (!s.isBoss && s.variant === 'purple' && eng.stats.wave >= 3 && dist < 440) {
@@ -1764,8 +1947,11 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           const dy = p.y - pk.y;
           const dist = Math.hypot(dx, dy) || 1;
 
-          if (dist <= eng.stats.magnetRadius) {
+          const healBlocked = pk.type === 'health' && p.bleedTimer > 0;
+          if (!healBlocked && dist <= eng.stats.magnetRadius) {
             pk.magnetized = true;
+          } else if (healBlocked) {
+            pk.magnetized = false;
           }
 
           if (pk.magnetized) {
@@ -1781,6 +1967,13 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           pk.y += pk.vy * dt;
 
           if (dist <= PLAYER_RADIUS + pk.radius + 8) {
+            if (healBlocked) {
+              if (p.bleedWarnCooldown <= 0) {
+                addFloatingText(p.x, p.y - 30, '¡Desangrado! Sin curación', '#F87171', 0.95);
+                p.bleedWarnCooldown = 1.4;
+              }
+              continue;
+            }
             // Pickup sparkle burst
             for (let k = 0; k < 4; k++) {
               const ang = Math.random() * Math.PI * 2;
@@ -2096,10 +2289,162 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           ctx.restore();
         }
 
-        // Draw Slimes (including smooth dissolve animation!)
+        // Draw Slimes & Grim Reaper Skeletons (including smooth dissolve animation)
         for (const s of eng.slimes) {
           ctx.save();
           ctx.translate(s.x, s.y);
+
+          if (s.variant === 'reaper') {
+            if (s.dying) {
+              const p = Math.min(1, s.dissolveTimer / s.dissolveDuration);
+              ctx.globalAlpha = Math.max(0, 1 - p);
+              ctx.translate(0, -p * 18);
+              ctx.scale(1 + p * 0.25, 1 + p * 0.25);
+            }
+
+            const hoverY = s.dying ? 0 : Math.sin(s.squishPhase) * 3.5;
+            const aimAng = Math.atan2(eng.player.y - s.y, eng.player.x - s.x);
+            const facingLeft = Math.cos(aimAng) < 0;
+
+            // Ground shadow
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+            ctx.beginPath();
+            ctx.ellipse(0, s.radius * 0.88, s.radius * 0.85, s.radius * 0.34, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.translate(0, hoverY);
+
+            // Ghostly death shroud aura
+            if (!s.dying) {
+              ctx.fillStyle = 'rgba(127, 29, 29, 0.25)';
+              ctx.beginPath();
+              ctx.arc(0, 0, s.radius * 1.25, 0, Math.PI * 2);
+              ctx.fill();
+            }
+
+            // Tattered Grim Reaper cloak & pointed hood
+            ctx.fillStyle = s.hitFlashTimer > 0 ? '#FFFFFF' : '#0F172A';
+            ctx.strokeStyle = s.hitFlashTimer > 0 ? '#FFFFFF' : '#7F1D1D';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, -s.radius * 1.28);
+            ctx.quadraticCurveTo(s.radius * 0.85, -s.radius * 0.72, s.radius * 0.92, s.radius * 0.65);
+            // Jagged tattered hem
+            ctx.lineTo(s.radius * 0.45, s.radius * 0.45);
+            ctx.lineTo(s.radius * 0.2, s.radius * 0.78);
+            ctx.lineTo(0, s.radius * 0.5);
+            ctx.lineTo(-s.radius * 0.2, s.radius * 0.78);
+            ctx.lineTo(-s.radius * 0.45, s.radius * 0.45);
+            ctx.lineTo(-s.radius * 0.92, s.radius * 0.65);
+            ctx.quadraticCurveTo(-s.radius * 0.85, -s.radius * 0.72, 0, -s.radius * 1.28);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+
+            // Subtle skeletal ribcage peeking under cloak
+            if (s.hitFlashTimer <= 0) {
+              ctx.strokeStyle = '#CBD5E1';
+              ctx.lineWidth = 1.6;
+              for (let r = 0; r < 3; r++) {
+                const ry = 2 + r * 4.5;
+                ctx.beginPath();
+                ctx.moveTo(-6, ry);
+                ctx.quadraticCurveTo(0, ry + 1.5, 6, ry);
+                ctx.stroke();
+              }
+            }
+
+            // Deep dark hood interior
+            ctx.fillStyle = '#020617';
+            ctx.beginPath();
+            ctx.ellipse(0, -s.radius * 0.38, s.radius * 0.48, s.radius * 0.52, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Pale skull inside hood
+            ctx.fillStyle = s.hitFlashTimer > 0 ? '#FFFFFF' : '#E2E8F0';
+            ctx.beginPath();
+            ctx.arc(0, -s.radius * 0.42, s.radius * 0.38, 0, Math.PI * 2);
+            ctx.fill();
+            // Jawbone
+            ctx.fillRect(-s.radius * 0.2, -s.radius * 0.22, s.radius * 0.4, s.radius * 0.22);
+
+            if (!s.dying && s.hitFlashTimer <= 0) {
+              // Hollow eye sockets + glowing crimson eyes
+              ctx.fillStyle = '#020617';
+              ctx.beginPath();
+              ctx.arc(-s.radius * 0.14, -s.radius * 0.42, 3.2, 0, Math.PI * 2);
+              ctx.arc(s.radius * 0.14, -s.radius * 0.42, 3.2, 0, Math.PI * 2);
+              ctx.fill();
+
+              ctx.fillStyle = '#EF4444';
+              ctx.beginPath();
+              ctx.arc(-s.radius * 0.14, -s.radius * 0.42, 1.6, 0, Math.PI * 2);
+              ctx.arc(s.radius * 0.14, -s.radius * 0.42, 1.6, 0, Math.PI * 2);
+              ctx.fill();
+
+              // Nasal cavity & teeth slits
+              ctx.fillStyle = '#020617';
+              ctx.beginPath();
+              ctx.moveTo(0, -s.radius * 0.34);
+              ctx.lineTo(-1.8, -s.radius * 0.25);
+              ctx.lineTo(1.8, -s.radius * 0.25);
+              ctx.closePath();
+              ctx.fill();
+
+              ctx.fillRect(-3.5, -s.radius * 0.14, 1.3, 3.5);
+              ctx.fillRect(-0.6, -s.radius * 0.14, 1.3, 3.5);
+              ctx.fillRect(2.3, -s.radius * 0.14, 1.3, 3.5);
+
+              // Bony hand + curved Reaper Scythe ready to throw
+              const handX = facingLeft ? -s.radius * 0.72 : s.radius * 0.72;
+              const dirSign = facingLeft ? -1 : 1;
+              ctx.fillStyle = '#E2E8F0';
+              ctx.beginPath();
+              ctx.arc(handX, 2, 3.4, 0, Math.PI * 2);
+              ctx.fill();
+
+              if (s.attackCooldown > 0.35) {
+                ctx.save();
+                ctx.translate(handX, 2);
+                ctx.rotate(dirSign * 0.28);
+                // Scythe shaft
+                ctx.strokeStyle = '#78350F';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(0, 14);
+                ctx.lineTo(0, -24);
+                ctx.stroke();
+
+                // Curved crescent blade
+                ctx.strokeStyle = '#E2E8F0';
+                ctx.lineWidth = 3.5;
+                ctx.beginPath();
+                ctx.arc(dirSign * 11, -22, 13, dirSign > 0 ? Math.PI : 0, dirSign > 0 ? Math.PI * 1.85 : Math.PI * 0.85, dirSign < 0);
+                ctx.stroke();
+
+                ctx.strokeStyle = '#EF4444';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.arc(dirSign * 11, -22, 14.5, dirSign > 0 ? Math.PI * 1.15 : Math.PI * 0.1, dirSign > 0 ? Math.PI * 1.85 : Math.PI * 0.85, dirSign < 0);
+                ctx.stroke();
+                ctx.restore();
+              }
+            }
+
+            ctx.restore();
+
+            if (!s.dying && s.hp < s.maxHp) {
+              const barW = Math.max(30, s.radius * 1.6);
+              const barH = 4;
+              const bx = s.x - barW / 2;
+              const by = s.y - s.radius - 14;
+              ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+              ctx.fillRect(bx - 1, by - 1, barW + 2, barH + 2);
+              ctx.fillStyle = '#EF4444';
+              ctx.fillRect(bx, by, barW * Math.max(0, s.hp / s.maxHp), barH);
+            }
+            continue;
+          }
 
           if (s.dying) {
             const p = Math.min(1, s.dissolveTimer / s.dissolveDuration);
@@ -2400,6 +2745,38 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             ctx.beginPath();
             ctx.arc(proj.x - 2, proj.y - 2, proj.radius * 0.4, 0, Math.PI * 2);
             ctx.fill();
+          } else if (proj.kind === 'scythe') {
+            ctx.translate(proj.x, proj.y);
+            ctx.rotate(proj.spinAngle ?? 0);
+
+            // Red spectral slash blur ring
+            ctx.strokeStyle = 'rgba(239, 68, 68, 0.45)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(0, 0, proj.radius + 2, 0, Math.PI * 1.4);
+            ctx.stroke();
+
+            // Dark handle shaft
+            ctx.strokeStyle = '#78350F';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(-12, 0);
+            ctx.lineTo(12, 0);
+            ctx.stroke();
+
+            // Gleaming curved scythe crescent blade
+            ctx.strokeStyle = '#E2E8F0';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.arc(4, 11, 13, Math.PI * 1.15, Math.PI * 1.9);
+            ctx.stroke();
+
+            // Crimson blood edge
+            ctx.strokeStyle = '#EF4444';
+            ctx.lineWidth = 1.8;
+            ctx.beginPath();
+            ctx.arc(4, 11, 14.5, Math.PI * 1.2, Math.PI * 1.9);
+            ctx.stroke();
           }
           ctx.restore();
         }
@@ -2470,6 +2847,18 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           ctx.fill();
 
           ctx.restore();
+
+          // Bleeding / slow crimson aura around player
+          if (p.bleedTimer > 0) {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(220, 38, 38, 0.78)';
+            ctx.lineWidth = 2.5;
+            ctx.setLineDash([6, 5]);
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, PLAYER_RADIUS + 14, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+          }
 
           // Reload ring around player
           if (wProg.reloading) {
