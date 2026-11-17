@@ -1,0 +1,6 @@
+{
+  "name": "Slime Arena",
+  "description": "Juego de disparos arcade 2D con múltiples armas, proyectiles únicos, oleadas de slimes que se desvanecen al ser destruidos, monedas y subida de nivel por experiencia.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
