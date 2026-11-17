@@ -22,10 +22,23 @@ export function HudBar({
   onTogglePause,
   onOpenArmory,
 }: HudBarProps) {
-  const { stats, bossInfo, slimesRemaining, bleedRemaining } = hud;
+  const {
+    stats,
+    bossInfo,
+    slimesRemaining,
+    bleedRemaining,
+    stunRemaining,
+    fallenAngelAlert,
+    weaponBuffs,
+  } = hud;
   const hpPct = Math.max(0, Math.min(100, (stats.hp / stats.maxHp) * 100));
   const xpPct = Math.max(0, Math.min(100, (stats.xp / stats.xpToNext) * 100));
   const isBleeding = bleedRemaining > 0;
+  const isStunned = stunRemaining > 0;
+  const hasWeaponBuffs =
+    weaponBuffs.damageRemaining > 0 ||
+    weaponBuffs.explosiveRemaining > 0 ||
+    weaponBuffs.infiniteRemaining > 0;
 
   return (
     <div className="pointer-events-none fixed inset-x-0 top-0 z-20 flex flex-col items-center gap-2 p-3 sm:p-4">
@@ -143,6 +156,100 @@ export function HudBar({
           </button>
         </div>
       </header>
+
+      {/* Active 10s Weapon Powerups */}
+      {hasWeaponBuffs && (
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {weaponBuffs.damageRemaining > 0 && (
+            <div className="flex items-center gap-2 rounded-lg border border-rose-400/70 bg-rose-950/90 px-3.5 py-1.5 text-xs font-semibold text-rose-200 shadow-md backdrop-blur-sm">
+              <span>Daño x2</span>
+              <span aria-hidden="true" className="opacity-60">
+                ·
+              </span>
+              <span className="font-mono tabular-nums text-white">
+                {weaponBuffs.damageRemaining.toFixed(1)}s
+              </span>
+            </div>
+          )}
+          {weaponBuffs.explosiveRemaining > 0 && (
+            <div className="flex items-center gap-2 rounded-lg border border-orange-400/70 bg-orange-950/90 px-3.5 py-1.5 text-xs font-semibold text-orange-200 shadow-md backdrop-blur-sm">
+              <span>Disparo Explosivo</span>
+              <span aria-hidden="true" className="opacity-60">
+                ·
+              </span>
+              <span className="font-mono tabular-nums text-white">
+                {weaponBuffs.explosiveRemaining.toFixed(1)}s
+              </span>
+            </div>
+          )}
+          {weaponBuffs.infiniteRemaining > 0 && (
+            <div className="flex items-center gap-2 rounded-lg border border-sky-400/70 bg-sky-950/90 px-3.5 py-1.5 text-xs font-semibold text-sky-200 shadow-md backdrop-blur-sm">
+              <span>Balas Infinitas</span>
+              <span aria-hidden="true" className="opacity-60">
+                ·
+              </span>
+              <span className="font-mono tabular-nums text-white">
+                {weaponBuffs.infiniteRemaining.toFixed(1)}s
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Active Fallen Angel 30s Judgment Alert */}
+      {fallenAngelAlert && (
+        <div
+          className={`flex items-center gap-3 rounded-lg border px-4 py-1.5 text-xs font-semibold shadow-md backdrop-blur-sm ${
+            fallenAngelAlert.curseActive
+              ? 'border-rose-500/80 bg-rose-950/90 text-rose-200 animate-pulse'
+              : 'border-amber-400/70 bg-amber-950/90 text-amber-200'
+          }`}
+        >
+          <span>
+            {fallenAngelAlert.activeCount > 1
+              ? `Ángeles Caídos (${fallenAngelAlert.activeCount})`
+              : 'Ángel Caído'}
+          </span>
+          <span aria-hidden="true" className="opacity-60">
+            ·
+          </span>
+          {fallenAngelAlert.curseActive ? (
+            <>
+              <span>Juicio Activo (2 golpes = Vida)</span>
+              <span aria-hidden="true" className="opacity-60">
+                ·
+              </span>
+              <span className="font-mono tabular-nums text-white">
+                Próximo golpe en {fallenAngelAlert.nextStrikeIn.toFixed(1)}s
+              </span>
+            </>
+          ) : (
+            <>
+              <span>Elimínalo antes de</span>
+              <span className="font-mono tabular-nums text-white">
+                {fallenAngelAlert.minDoomRemaining.toFixed(1)}s
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Active Stun Alert from Zombie Leader */}
+      {isStunned && (
+        <div className="flex items-center gap-3 rounded-lg border border-lime-400/70 bg-lime-950/90 px-4 py-1.5 text-xs font-semibold text-lime-200 shadow-md backdrop-blur-sm">
+          <span>Aturdido contra el muro</span>
+          <span aria-hidden="true" className="text-lime-400/70">
+            ·
+          </span>
+          <span>Inmovilizado</span>
+          <span aria-hidden="true" className="text-lime-400/70">
+            ·
+          </span>
+          <span className="font-mono tabular-nums text-lime-100">
+            {stunRemaining.toFixed(1)}s
+          </span>
+        </div>
+      )}
 
       {/* Active Scythe Bleed & Slow Debuff Alert */}
       {isBleeding && (

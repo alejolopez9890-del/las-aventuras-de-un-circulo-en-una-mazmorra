@@ -1,11 +1,13 @@
 import { ArrowUpRight, Check, Coins, Gauge, Heart, ShoppingBag, X } from 'lucide-react';
 import {
+  computeWeaponDamage,
   getSpeedUpgradeCost,
   getWeaponUpgradeCost,
   MEDKIT_COST,
   SPEED_UPGRADE_MAX_LEVEL,
   SPEED_UPGRADE_STEP,
   WEAPON_LIST,
+  WEAPON_MAX_LEVEL,
 } from '../data/weapons';
 import { HudSnapshot, WeaponId } from '../types/game';
 
@@ -157,12 +159,15 @@ export function ArmoryModal({
               const prog = weapons[weapon.id];
               const isEquipped = activeWeapon === weapon.id;
               const upgradeCost = getWeaponUpgradeCost(weapon, prog.upgradeLevel);
-              const isMaxLevel = prog.upgradeLevel >= 5;
+              const isMaxLevel = prog.upgradeLevel >= WEAPON_MAX_LEVEL;
               const canAffordBuy = !prog.unlocked && stats.coins >= weapon.cost;
               const canAffordUpgrade =
                 prog.unlocked && !isMaxLevel && stats.coins >= upgradeCost;
-              const currentDamage = Math.round(
-                weapon.damage * (1 + (prog.upgradeLevel - 1) * 0.22) * stats.damageMultiplier
+              const currentDamage = computeWeaponDamage(
+                weapon,
+                prog.upgradeLevel,
+                stats.damageMultiplier,
+                stats.wave
               );
 
               return (
@@ -191,7 +196,7 @@ export function ArmoryModal({
                           {prog.unlocked && (
                             <>
                               {' '}
-                              · Nivel {prog.upgradeLevel}/5
+                              · Nivel {prog.upgradeLevel}/{WEAPON_MAX_LEVEL}
                             </>
                           )}
                         </p>
@@ -279,7 +284,7 @@ export function ArmoryModal({
                           <span>
                             {isMaxLevel
                               ? 'Nivel Máximo'
-                              : `Mejorar +22% Daño (${upgradeCost} monedas)`}
+                              : `Mejorar +30% Daño / +6% Vel (${upgradeCost} monedas)`}
                           </span>
                         </button>
                       </>

@@ -131,12 +131,28 @@ export const MEDKIT_COST = 45;
 export const SPEED_UPGRADE_MAX_LEVEL = 6;
 export const SPEED_UPGRADE_STEP = 0.03; // +3% por nivel (mejora muy mínima)
 
+export const WEAPON_MAX_LEVEL = 10;
+export const WEAPON_UPGRADE_DAMAGE_STEP = 0.3; // +30% daño por nivel de armería
+export const WEAPON_UPGRADE_FIRERATE_STEP = 0.06; // +6% cadencia de disparo por nivel
+export const WAVE_WEAPON_POWER_STEP = 0.06; // +6% potencia por cada oleada superada
+
 export function getSpeedUpgradeCost(currentLevel: number): number {
   return Math.round(55 * Math.pow(1.65, currentLevel));
 }
 
 export function getWeaponUpgradeCost(weapon: WeaponDefinition, currentLevel: number): number {
-  return Math.round(weapon.upgradeBaseCost * Math.pow(1.85, currentLevel - 1));
+  return Math.round(weapon.upgradeBaseCost * Math.pow(1.58, currentLevel - 1));
+}
+
+export function computeWeaponDamage(
+  weapon: WeaponDefinition,
+  upgradeLevel: number,
+  damageMultiplier: number,
+  wave: number
+): number {
+  const levelBoost = 1 + (upgradeLevel - 1) * WEAPON_UPGRADE_DAMAGE_STEP;
+  const waveMasteryBoost = 1 + Math.max(0, wave - 1) * WAVE_WEAPON_POWER_STEP;
+  return Math.round(weapon.damage * levelBoost * waveMasteryBoost * damageMultiplier);
 }
 
 export const LEVEL_UP_POOL: LevelUpUpgrade[] = [

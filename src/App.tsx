@@ -1,18 +1,44 @@
-import { useCallback, useRef, useState } from 'react';
-import { Play, RotateCcw, Trophy } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Award, RotateCcw } from 'lucide-react';
 import { soundEngine } from './audio/soundEngine';
 import { ArmoryModal } from './components/ArmoryModal';
+import { DeathCinematic } from './components/DeathCinematic';
+import { DivineReviveCinematic } from './components/DivineReviveCinematic';
+import { EnemyRevealCinematic } from './components/EnemyRevealCinematic';
 import { HudBar } from './components/HudBar';
+import { IntroCinematic } from './components/IntroCinematic';
 import { LevelUpModal } from './components/LevelUpModal';
+import { SkinsModal } from './components/SkinsModal';
+import { TitleScreen } from './components/TitleScreen';
 import { WeaponHotbar } from './components/WeaponHotbar';
-import { LEVEL_UP_POOL, WEAPON_LIST, WEAPONS } from './data/weapons';
-import { GameEngineHandle, SlimeArenaCanvas } from './game/SlimeArenaCanvas';
-import { GameState, HudSnapshot, LevelUpUpgrade, PlayerStats, WeaponId } from './types/game';
+import {
+  evaluateSkinUnlocks,
+  loadProgress,
+  saveProgress,
+  SKIN_LIST,
+  SKINS,
+} from './data/skins';
+import { LEVEL_UP_POOL, WEAPONS } from './data/weapons';
+import {
+  GameEngineHandle,
+  ProgressEventPayload,
+  SlimeArenaCanvas,
+} from './game/SlimeArenaCanvas';
+import {
+  EnemyRevealId,
+  GameState,
+  HudSnapshot,
+  LevelUpUpgrade,
+  PersistentProgress,
+  PlayerStats,
+  SkinId,
+  WeaponId,
+} from './types/game';
 
 const INITIAL_HUD: HudSnapshot = {
   stats: {
-    hp: 100,
-    maxHp: 100,
+    hp: 150,
+    maxHp: 150,
     level: 1,
     xp: 0,
     xpToNext: 105,
@@ -39,6 +65,13 @@ const INITIAL_HUD: HudSnapshot = {
   bossInfo: null,
   slimesRemaining: 0,
   bleedRemaining: 0,
+  stunRemaining: 0,
+  fallenAngelAlert: null,
+  weaponBuffs: {
+    damageRemaining: 0,
+    explosiveRemaining: 0,
+    infiniteRemaining: 0,
+  },
 };
 
 function pickThreeUpgrades(): LevelUpUpgrade[] {
@@ -50,8 +83,6 @@ function pickThreeUpgrades(): LevelUpUpgrade[] {
   return pool.slice(0, 3);
 }
 
-const BEST_SCORE_KEY = 'slime_arena_best_score';
-
 export default function App() {
   const engineRef = useRef<GameEngineHandle | null>(null);
   const [gameState, setGameState] = useState<GameState>('TITLE_MENU');
@@ -60,15 +91,76 @@ export default function App() {
   const [autoFire, setAutoFire] = useState(false);
   const [levelUpChoices, setLevelUpChoices] = useState<LevelUpUpgrade[]>([]);
   const [pendingLevel, setPendingLevel] = useState(1);
+  const [pendingEnemyReveal, setPendingEnemyReveal] = useState<{
+    enemyId: EnemyRevealId;
+    wave: number;
+  } | null>(null);
+  const [reviveWave, setReviveWave] = useState(1);
+  const [reviveBonusCoins, setReviveBonusCoins] = useState(0);
   const [finalStats, setFinalStats] = useState<PlayerStats | null>(null);
-  const [bestScore, setBestScore] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem(BEST_SCORE_KEY);
-      return saved ? parseInt(saved, 10) || 0 : 0;
-    } catch {
-      return 0;
-    }
-  });
+  const [progress, setProgress] = useState<PersistentProgress>(() => loadProgress());
+  const [showSkinsModal, setShowSkinsModal] = useState(false);
+  const [unlockedToastQueue, setUnlockedToastQueue] = useState<SkinId[]>([]);
+
+  useEffect(() => {
+    if (unlockedToastQueue.length === 0) return;
+    const timer = window.setTimeout(() => {
+      setUnlockedToastQueue((prev) => prev.slice(1));
+    }, 4400);
+    return () => window.clearTimeout(timer);
+  }, [unlockedToastQueue]);
+
+  const applyProgressUpdate = useCallback(
+    (updater: (prev: PersistentProgress) => PersistentProgress) => {
+      setProgress((prev) => {
+        const updated = updater(prev);
+        const { nextProgress, newlyUnlocked } = evaluateSkinUnlocks(updated);
+        saveProgress(nextProgress);
+        if (newlyUnlocked.length > 0) {
+          soundEngine.playAchievement();
+          setUnlockedToastQueue((q) => [...q, ...newlyUnlocked]);
+        }
+        return nextProgress;
+      });
+    },
+    []
+  );
+
+  const handleProgressEvent = useCallback(
+    (ev: ProgressEventPayload) => {
+      if (
+        !ev.kills &&
+        !ev.bosses &&
+        !ev.fallenAngelsKilled &&
+        !ev.reapersKilled &&
+        !ev.zombieLeadersKilled &&
+        !ev.wave &&
+        !ev.level &&
+        !ev.weaponsUnlocked &&
+        !ev.weaponUpgradeLevel &&
+        !ev.score
+      ) {
+        return;
+      }
+      applyProgressUpdate((prev) => ({
+        ...prev,
+        bestScore: Math.max(prev.bestScore, ev.score ?? 0),
+        totalKills: prev.totalKills + (ev.kills ?? 0),
+        bossesDefeated: prev.bossesDefeated + (ev.bosses ?? 0),
+        fallenAngelsKilled: prev.fallenAngelsKilled + (ev.fallenAngelsKilled ?? 0),
+        reapersKilled: prev.reapersKilled + (ev.reapersKilled ?? 0),
+        zombieLeadersKilled: prev.zombieLeadersKilled + (ev.zombieLeadersKilled ?? 0),
+        maxWeaponUpgradeLevel: Math.max(
+          prev.maxWeaponUpgradeLevel,
+          ev.weaponUpgradeLevel ?? 1
+        ),
+        maxWave: Math.max(prev.maxWave, ev.wave ?? 1),
+        maxLevel: Math.max(prev.maxLevel, ev.level ?? 1),
+        maxWeaponsUnlocked: Math.max(prev.maxWeaponsUnlocked, ev.weaponsUnlocked ?? 1),
+      }));
+    },
+    [applyProgressUpdate]
+  );
 
   const handleHudUpdate = useCallback((snapshot: HudSnapshot) => {
     setHud(snapshot);
@@ -80,19 +172,37 @@ export default function App() {
     setGameState('LEVEL_UP');
   }, []);
 
-  const handleGameOver = useCallback((stats: PlayerStats) => {
-    setFinalStats(stats);
-    setBestScore((prev) => {
-      const next = Math.max(prev, stats.score);
-      try {
-        localStorage.setItem(BEST_SCORE_KEY, String(next));
-      } catch {
-        // Ignore storage restrictions
-      }
-      return next;
-    });
-    setGameState('GAME_OVER');
+  const handleNewEnemyReveal = useCallback((enemyId: EnemyRevealId, wave: number) => {
+    setPendingEnemyReveal({ enemyId, wave });
+    setGameState('ENEMY_REVEAL');
   }, []);
+
+  const handleDivineRevive = useCallback(
+    (waveReached: number, bonusCoins: number) => {
+      setReviveWave(waveReached);
+      setReviveBonusCoins(bonusCoins);
+      applyProgressUpdate((prev) => ({
+        ...prev,
+        divineRevives: prev.divineRevives + 1,
+      }));
+      setGameState('DIVINE_REVIVE');
+    },
+    [applyProgressUpdate]
+  );
+
+  const handleGameOver = useCallback(
+    (stats: PlayerStats) => {
+      setFinalStats(stats);
+      applyProgressUpdate((prev) => ({
+        ...prev,
+        bestScore: Math.max(prev.bestScore, stats.score),
+        maxWave: Math.max(prev.maxWave, stats.wave),
+        maxLevel: Math.max(prev.maxLevel, stats.level),
+      }));
+      setGameState('DEATH_CINEMATIC');
+    },
+    [applyProgressUpdate]
+  );
 
   const handleOpenArmory = useCallback(() => {
     setGameState((prev) => {
@@ -110,11 +220,28 @@ export default function App() {
     });
   }, []);
 
-  const startNewGame = () => {
+  const startNewGame = useCallback(() => {
     engineRef.current?.resetGame();
     setFinalStats(null);
+    setShowSkinsModal(false);
     setGameState('PLAYING');
-  };
+  }, []);
+
+  const startStoryCinematic = useCallback(() => {
+    engineRef.current?.resetGame();
+    setFinalStats(null);
+    setShowSkinsModal(false);
+    setGameState('CINEMATIC');
+  }, []);
+
+  const handleSelectSkin = useCallback(
+    (skinId: SkinId) => {
+      applyProgressUpdate((prev) =>
+        prev.unlockedSkins.includes(skinId) ? { ...prev, selectedSkin: skinId } : prev
+      );
+    },
+    [applyProgressUpdate]
+  );
 
   const handleToggleMute = () => {
     const next = !muted;
@@ -147,6 +274,9 @@ export default function App() {
     setGameState('PLAYING');
   };
 
+  const activeToastSkin = unlockedToastQueue.length > 0 ? SKINS[unlockedToastQueue[0]] : null;
+  const selectedSkinInfo = SKINS[progress.selectedSkin] ?? SKINS.sentinel;
+
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-slate-950 text-slate-100">
       {/* 60fps Game Canvas */}
@@ -154,116 +284,104 @@ export default function App() {
         ref={engineRef}
         gameState={gameState}
         autoFire={autoFire}
+        selectedSkin={progress.selectedSkin}
         onHudUpdate={handleHudUpdate}
         onLevelUp={handleLevelUp}
+        onNewEnemyReveal={handleNewEnemyReveal}
+        onDivineRevive={handleDivineRevive}
+        onProgressEvent={handleProgressEvent}
         onGameOver={handleGameOver}
         onOpenArmory={handleOpenArmory}
         onTogglePause={handleTogglePause}
       />
 
-      {/* Active HUD & Weapon Hotbar */}
-      {gameState !== 'TITLE_MENU' && (
-        <>
-          <HudBar
-            hud={hud}
-            muted={muted}
-            autoFire={autoFire}
-            isPaused={gameState === 'PAUSED'}
-            onToggleMute={handleToggleMute}
-            onToggleAutoFire={() => setAutoFire((v) => !v)}
-            onTogglePause={handleTogglePause}
-            onOpenArmory={handleOpenArmory}
-          />
-
-          <WeaponHotbar
-            hud={hud}
-            onSelectWeapon={handleSelectWeapon}
-            onOpenArmory={handleOpenArmory}
-          />
-        </>
-      )}
-
-      {/* Title Menu */}
-      {gameState === 'TITLE_MENU' && (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-[2px]">
-          <div className="w-full max-w-2xl rounded-2xl border border-slate-700/80 bg-slate-900/95 p-7 sm:p-9 shadow-2xl">
-            <div className="flex flex-wrap items-baseline justify-between gap-4">
-              <h1 className="font-display text-4xl sm:text-5xl font-extrabold tracking-tight text-white">
-                Slime Arena
-              </h1>
-              {bestScore > 0 && (
-                <div className="flex items-center gap-2 text-sm font-mono tabular-nums text-amber-400">
-                  <Trophy className="h-4 w-4" />
-                  <span>Mejor puntuación: {bestScore}</span>
-                </div>
-              )}
+      {/* Non-intrusive Skin & Achievement Unlock Notification */}
+      {activeToastSkin && (
+        <div className="pointer-events-none fixed right-4 top-20 z-50 flex max-w-xs items-center gap-3 rounded-xl border border-amber-400/60 bg-slate-900/95 px-4 py-3 shadow-2xl backdrop-blur-sm">
+          <Award className="h-5 w-5 shrink-0 text-amber-400" />
+          <div className="min-w-0">
+            <div className="text-[11px] font-semibold text-amber-300">
+              Logro: {activeToastSkin.achievementTitle}
             </div>
-
-            <p className="mt-3 text-sm sm:text-base leading-relaxed text-slate-300 max-w-xl">
-              Enfréntate a hordas de slimes tenebrosos, esqueletos segadores con hoces letales y un
-              jefe cada 2 oleadas. Al caer sueltan pocas monedas y experiencia: administra tu botín
-              para subir de nivel y costear las armas más poderosas.
-            </p>
-
-            {/* Controls & Arsenal Summary */}
-            <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 border-y border-slate-800 py-5">
-              <div className="space-y-2">
-                <h2 className="text-xs font-semibold text-slate-400">Controles de Combate</h2>
-                <ul className="space-y-1.5 text-xs text-slate-300">
-                  <li>
-                    <span className="font-mono text-slate-100">W A S D</span> o Flechas · Moverse
-                  </li>
-                  <li>
-                    <span className="font-mono text-slate-100">Mouse + Clic</span> · Apuntar y disparar
-                  </li>
-                  <li>
-                    <span className="font-mono text-slate-100">Espacio / Shift</span> · Impulso evasivo
-                  </li>
-                  <li>
-                    <span className="font-mono text-slate-100">1 – 5</span> o Rueda · Cambiar de arma
-                  </li>
-                  <li>
-                    <span className="font-mono text-slate-100">B</span> · Abrir Armería ·{' '}
-                    <span className="font-mono text-slate-100">R</span> · Recargar
-                  </li>
-                </ul>
-              </div>
-
-              <div className="space-y-2">
-                <h2 className="text-xs font-semibold text-slate-400">Armas y Proyectiles</h2>
-                <ul className="space-y-1.5 text-xs text-slate-300">
-                  {WEAPON_LIST.map((w) => (
-                    <li key={w.id} className="flex items-center gap-2">
-                      <span
-                        className="h-2.5 w-2.5 rounded-sm shrink-0"
-                        style={{ backgroundColor: w.color }}
-                      />
-                      <span className="font-medium text-slate-100">{w.name}</span>
-                      <span aria-hidden="true" className="text-slate-600">
-                        ·
-                      </span>
-                      <span className="text-slate-400 truncate">{w.projectileName}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-
-            <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
-              <span className="text-xs text-slate-400">
-                Tip: Acércate a los restos de slimes para atraer monedas y XP.
-              </span>
-              <button
-                type="button"
-                onClick={startNewGame}
-                className="inline-flex items-center gap-2.5 rounded-xl bg-emerald-500 px-6 py-3 text-sm font-bold text-slate-950 transition-colors hover:bg-emerald-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-400 cursor-pointer"
-              >
-                <Play className="h-4 w-4 fill-current" />
-                <span>Iniciar Partida</span>
-              </button>
+            <div className="truncate text-sm font-bold text-white">
+              Skin desbloqueada · {activeToastSkin.name}
             </div>
           </div>
         </div>
+      )}
+
+      {/* Active HUD & Weapon Hotbar */}
+      {gameState !== 'TITLE_MENU' &&
+        gameState !== 'CINEMATIC' &&
+        gameState !== 'ENEMY_REVEAL' &&
+        gameState !== 'DIVINE_REVIVE' &&
+        gameState !== 'DEATH_CINEMATIC' && (
+          <>
+            <HudBar
+              hud={hud}
+              muted={muted}
+              autoFire={autoFire}
+              isPaused={gameState === 'PAUSED'}
+              onToggleMute={handleToggleMute}
+              onToggleAutoFire={() => setAutoFire((v) => !v)}
+              onTogglePause={handleTogglePause}
+              onOpenArmory={handleOpenArmory}
+            />
+
+            <WeaponHotbar
+              hud={hud}
+              onSelectWeapon={handleSelectWeapon}
+              onOpenArmory={handleOpenArmory}
+            />
+          </>
+        )}
+
+      {/* Title Screen */}
+      {gameState === 'TITLE_MENU' && (
+        <TitleScreen
+          bestScore={progress.bestScore}
+          unlockedSkinsCount={progress.unlockedSkins.length}
+          totalSkinsCount={SKIN_LIST.length}
+          selectedSkinName={selectedSkinInfo.name}
+          onStartStory={startStoryCinematic}
+          onStartDirect={startNewGame}
+          onOpenSkins={() => setShowSkinsModal(true)}
+        />
+      )}
+
+      {/* Animated Intro Story Cinematic */}
+      {gameState === 'CINEMATIC' && <IntroCinematic onComplete={startNewGame} />}
+
+      {/* Mini Story Cinematic for New Enemy Introductions */}
+      {gameState === 'ENEMY_REVEAL' && pendingEnemyReveal && (
+        <EnemyRevealCinematic
+          enemyId={pendingEnemyReveal.enemyId}
+          wave={pendingEnemyReveal.wave}
+          onComplete={() => {
+            setPendingEnemyReveal(null);
+            setGameState('PLAYING');
+          }}
+        />
+      )}
+
+      {/* Rare 5% / 1% (+1000 coins) Divine Revival Story Cinematic */}
+      {gameState === 'DIVINE_REVIVE' && (
+        <DivineReviveCinematic
+          waveReached={reviveWave}
+          bonusCoins={reviveBonusCoins}
+          onComplete={() => {
+            engineRef.current?.revivePlayer(reviveBonusCoins);
+            setGameState('PLAYING');
+          }}
+        />
+      )}
+
+      {/* Defeat Story Cinematic before Game Over Summary */}
+      {gameState === 'DEATH_CINEMATIC' && finalStats && (
+        <DeathCinematic
+          waveReached={finalStats.wave}
+          onComplete={() => setGameState('GAME_OVER')}
+        />
       )}
 
       {/* Armory Modal */}
@@ -289,7 +407,7 @@ export default function App() {
       )}
 
       {/* Pause Modal */}
-      {gameState === 'PAUSED' && (
+      {gameState === 'PAUSED' && !showSkinsModal && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-900 p-6 text-center shadow-2xl">
             <h2 className="font-display text-2xl font-bold text-white">Juego en Pausa</h2>
@@ -314,6 +432,13 @@ export default function App() {
               </button>
               <button
                 type="button"
+                onClick={() => setShowSkinsModal(true)}
+                className="w-full rounded-lg border border-amber-500/40 bg-amber-950/40 px-4 py-2.5 text-sm font-semibold text-amber-200 hover:bg-amber-900/50 cursor-pointer"
+              >
+                Skins y Logros ({progress.unlockedSkins.length}/{SKIN_LIST.length})
+              </button>
+              <button
+                type="button"
                 onClick={startNewGame}
                 className="w-full rounded-lg border border-slate-800 bg-slate-950 px-4 py-2.5 text-sm font-medium text-slate-400 hover:text-slate-200 cursor-pointer"
               >
@@ -325,14 +450,14 @@ export default function App() {
       )}
 
       {/* Game Over Modal */}
-      {gameState === 'GAME_OVER' && finalStats && (
+      {gameState === 'GAME_OVER' && finalStats && !showSkinsModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-7 shadow-2xl">
             <h2 className="font-display text-3xl font-extrabold text-white text-center">
               Fin de la Partida
             </h2>
             <p className="mt-1 text-center text-sm text-slate-400">
-              Los slimes superaron tus defensas en la oleada {finalStats.wave}.
+              Caíste en la oleada {finalStats.wave} antes de rescatar a tu familiar.
             </p>
 
             <div className="mt-6 grid grid-cols-2 gap-3 border-y border-slate-800 py-5 font-mono tabular-nums">
@@ -342,7 +467,7 @@ export default function App() {
               </div>
               <div className="rounded-lg bg-slate-950/60 p-3">
                 <div className="text-xs font-sans text-slate-400">Mejor Récord</div>
-                <div className="mt-1 text-xl font-bold text-amber-400">{bestScore}</div>
+                <div className="mt-1 text-xl font-bold text-amber-400">{progress.bestScore}</div>
               </div>
               <div className="rounded-lg bg-slate-950/60 p-3">
                 <div className="text-xs font-sans text-slate-400">Slimes Eliminados</div>
@@ -354,14 +479,21 @@ export default function App() {
               </div>
             </div>
 
-            <div className="mt-6 flex items-center gap-3">
+            <div className="mt-6 flex flex-wrap items-center gap-3">
               <button
                 type="button"
                 onClick={startNewGame}
-                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-500 px-5 py-3 text-sm font-bold text-slate-950 hover:bg-emerald-400 cursor-pointer"
+                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-500 px-5 py-3 text-sm font-bold text-slate-950 hover:bg-emerald-400 whitespace-nowrap cursor-pointer"
               >
                 <RotateCcw className="h-4 w-4" />
                 <span>Jugar de Nuevo</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSkinsModal(true)}
+                className="rounded-xl border border-amber-500/40 bg-amber-950/40 px-4 py-3 text-sm font-semibold text-amber-200 hover:bg-amber-900/50 whitespace-nowrap cursor-pointer"
+              >
+                Skins ({progress.unlockedSkins.length}/{SKIN_LIST.length})
               </button>
               <button
                 type="button"
@@ -373,6 +505,15 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Skins & Achievements Modal */}
+      {showSkinsModal && (
+        <SkinsModal
+          progress={progress}
+          onSelectSkin={handleSelectSkin}
+          onClose={() => setShowSkinsModal(false)}
+        />
       )}
     </div>
   );

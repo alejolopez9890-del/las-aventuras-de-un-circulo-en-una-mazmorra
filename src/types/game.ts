@@ -1,10 +1,73 @@
 export type GameState =
   | 'TITLE_MENU'
+  | 'CINEMATIC'
+  | 'ENEMY_REVEAL'
   | 'PLAYING'
   | 'PAUSED'
   | 'LEVEL_UP'
   | 'ARMORY'
+  | 'DIVINE_REVIVE'
+  | 'DEATH_CINEMATIC'
   | 'GAME_OVER';
+
+export type EnemyRevealId = 'reaper' | 'zombie_leader' | 'fallen_angel';
+
+export type SkinId =
+  | 'sentinel'
+  | 'crimson_hunter'
+  | 'cyber_raider'
+  | 'shadow_reaper'
+  | 'golden_champion'
+  | 'titan_emerald'
+  | 'celestial_god'
+  | 'abyssal_knight'
+  | 'inferno_warden'
+  | 'arsenal_master'
+  | 'angel_slayer'
+  | 'eternal_monarch'
+  | 'void_harbinger'
+  | 'bone_emperor'
+  | 'warbanner_breaker'
+  | 'seraph_bane'
+  | 'colossus_vanquisher'
+  | 'omega_forged'
+  | 'immortal_phoenix'
+  | 'chronos_sentinel'
+  | 'crimson_overlord'
+  | 'arcane_archon'
+  | 'apocalypse_knight'
+  | 'eclipse_valkyrie'
+  | 'galaxy_phantom'
+  | 'blood_sovereign'
+  | 'omnipotent_one';
+
+export interface SkinDefinition {
+  id: SkinId;
+  name: string;
+  tier: 'Estándar' | 'Élite' | 'Maestro' | 'Leyenda';
+  achievementTitle: string;
+  achievementDesc: string;
+  primaryColor: string;
+  secondaryColor: string;
+  visorColor: string;
+  accentColor: string;
+}
+
+export interface PersistentProgress {
+  bestScore: number;
+  maxWave: number;
+  maxLevel: number;
+  totalKills: number;
+  bossesDefeated: number;
+  fallenAngelsKilled: number;
+  reapersKilled: number;
+  zombieLeadersKilled: number;
+  maxWeaponUpgradeLevel: number;
+  maxWeaponsUnlocked: number;
+  divineRevives: number;
+  unlockedSkins: SkinId[];
+  selectedSkin: SkinId;
+}
 
 export type WeaponId = 'pistol' | 'shotgun' | 'plasma' | 'grenade' | 'laser';
 
@@ -50,6 +113,8 @@ export type SlimeVariant =
   | 'mini_magma'
   | 'volatile'
   | 'reaper'
+  | 'zombie_leader'
+  | 'fallen_angel'
   | 'king';
 
 export interface ZoneHazard {
@@ -103,6 +168,14 @@ export interface Slime {
   summonCooldown?: number;
   fuseTimer?: number;
   maxFuse?: number;
+  doomTimer?: number;
+  doomActivated?: boolean;
+  doomStrikeCooldown?: number;
+  chargeCooldown?: number;
+  chargeTelegraphTimer?: number;
+  chargeActiveTimer?: number;
+  chargeDirX?: number;
+  chargeDirY?: number;
   isBoss?: boolean;
   bossTier?: number;
   bossName?: string;
@@ -126,6 +199,7 @@ export interface Projectile {
   pierceLeft: number;
   hitIds: Set<number>;
   explosionRadius: number;
+  isExplosiveBuff?: boolean;
   distanceTraveled: number;
   maxRange: number;
   lifeTimer: number;
@@ -135,7 +209,13 @@ export interface Projectile {
 
 export interface Pickup {
   id: number;
-  type: 'coin' | 'xp' | 'health';
+  type:
+    | 'coin'
+    | 'xp'
+    | 'health'
+    | 'weapon_damage'
+    | 'weapon_explosive'
+    | 'weapon_infinite';
   x: number;
   y: number;
   vx: number;
@@ -218,4 +298,16 @@ export interface HudSnapshot {
   } | null;
   slimesRemaining: number;
   bleedRemaining: number;
+  stunRemaining: number;
+  fallenAngelAlert: {
+    activeCount: number;
+    minDoomRemaining: number;
+    curseActive: boolean;
+    nextStrikeIn: number;
+  } | null;
+  weaponBuffs: {
+    damageRemaining: number;
+    explosiveRemaining: number;
+    infiniteRemaining: number;
+  };
 }

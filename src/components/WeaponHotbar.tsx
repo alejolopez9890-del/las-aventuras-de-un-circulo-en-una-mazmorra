@@ -27,9 +27,11 @@ export function WeaponHotbar({ hud, onSelectWeapon, onOpenArmory }: WeaponHotbar
           ·
         </span>
         <span className="font-mono tabular-nums text-slate-200">
-          {activeProg.reloading
-            ? `Recargando ${Math.round(activeProg.reloadProgress * 100)}%`
-            : `Munición ${activeProg.ammo}/${activeDef.magSize}`}
+          {hud.weaponBuffs.infiniteRemaining > 0
+            ? 'Munición ∞'
+            : activeProg.reloading
+              ? `Recargando ${Math.round(activeProg.reloadProgress * 100)}%`
+              : `Munición ${activeProg.ammo}/${activeDef.magSize}`}
         </span>
         <span aria-hidden="true" className="text-slate-600">
           ·

@@ -1,16 +1,21 @@
 import React, { useEffect, useImperativeHandle, useRef } from 'react';
 import { soundEngine } from '../audio/soundEngine';
+import { SKINS } from '../data/skins';
 import {
+  computeWeaponDamage,
   getSpeedUpgradeCost,
   getWeaponUpgradeCost,
   MEDKIT_COST,
   SPEED_UPGRADE_MAX_LEVEL,
   SPEED_UPGRADE_STEP,
   WEAPON_LIST,
+  WEAPON_MAX_LEVEL,
+  WEAPON_UPGRADE_FIRERATE_STEP,
   WEAPONS,
 } from '../data/weapons';
 import {
   BossZone,
+  EnemyRevealId,
   FloatingText,
   GameState,
   HudSnapshot,
@@ -18,6 +23,7 @@ import {
   Pickup,
   PlayerStats,
   Projectile,
+  SkinId,
   Slime,
   SlimeVariant,
   WeaponId,
@@ -25,8 +31,22 @@ import {
   ZoneHazard,
 } from '../types/game';
 
+export interface ProgressEventPayload {
+  kills?: number;
+  bosses?: number;
+  fallenAngelsKilled?: number;
+  reapersKilled?: number;
+  zombieLeadersKilled?: number;
+  weaponUpgradeLevel?: number;
+  score?: number;
+  wave?: number;
+  level?: number;
+  weaponsUnlocked?: number;
+}
+
 export interface GameEngineHandle {
   resetGame: () => void;
+  revivePlayer: (bonusCoins?: number) => void;
   selectWeapon: (id: WeaponId) => void;
   buyWeapon: (id: WeaponId) => boolean;
   upgradeWeapon: (id: WeaponId) => boolean;
@@ -38,8 +58,12 @@ export interface GameEngineHandle {
 interface SlimeArenaCanvasProps {
   gameState: GameState;
   autoFire: boolean;
+  selectedSkin: SkinId;
   onHudUpdate: (snapshot: HudSnapshot) => void;
   onLevelUp: (newLevel: number) => void;
+  onNewEnemyReveal: (enemyId: EnemyRevealId, wave: number) => void;
+  onDivineRevive: (waveReached: number, bonusCoins: number) => void;
+  onProgressEvent: (event: ProgressEventPayload) => void;
   onGameOver: (finalStats: PlayerStats) => void;
   onOpenArmory: () => void;
   onTogglePause: () => void;
@@ -95,8 +119,8 @@ function createInitialWeapons(): Record<WeaponId, WeaponProgress> {
 
 function createInitialStats(): PlayerStats {
   return {
-    hp: 100,
-    maxHp: 100,
+    hp: 150,
+    maxHp: 150,
     level: 1,
     xp: 0,
     xpToNext: 105,
@@ -159,8 +183,12 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
     {
       gameState,
       autoFire,
+      selectedSkin,
       onHudUpdate,
       onLevelUp,
+      onNewEnemyReveal,
+      onDivineRevive,
+      onProgressEvent,
       onGameOver,
       onOpenArmory,
       onTogglePause,
@@ -170,14 +198,23 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const gameStateRef = useRef<GameState>(gameState);
     const autoFireRef = useRef<boolean>(autoFire);
+    const selectedSkinRef = useRef<SkinId>(selectedSkin);
 
     useEffect(() => {
       gameStateRef.current = gameState;
+      if (gameState !== 'PLAYING') {
+        engineRef.current.input.keys.clear();
+        engineRef.current.input.mouseDown = false;
+      }
     }, [gameState]);
 
     useEffect(() => {
       autoFireRef.current = autoFire;
     }, [autoFire]);
+
+    useEffect(() => {
+      selectedSkinRef.current = selectedSkin;
+    }, [selectedSkin]);
 
     const engineRef = useRef({
       nextEntityId: 1,
@@ -198,6 +235,12 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         bleedTimer: 0,
         bleedTickTimer: 0,
         bleedWarnCooldown: 0,
+        stunTimer: 0,
+        knockbackVx: 0,
+        knockbackVy: 0,
+        weaponDamageBuffTimer: 0,
+        weaponExplosiveBuffTimer: 0,
+        weaponInfiniteBuffTimer: 0,
       },
       stats: createInitialStats(),
       activeWeapon: 'pistol' as WeaponId,
@@ -210,6 +253,7 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
       floatingTexts: [] as FloatingText[],
       bossZones: createBossZones(),
       zoneHazards: [] as ZoneHazard[],
+      revealedEnemies: new Set<EnemyRevealId>(),
       ambientTimer: 0,
       waveState: {
         toSpawn: [] as SlimeVariant[],
@@ -255,24 +299,38 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
       }
 
       for (let i = 0; i < count; i++) {
-        if (wave === 1 && (i === 5 || i === 11)) {
+        if (wave === 3 && (i === 2 || i === 8)) {
           queue.push('reaper');
           continue;
         }
+        if (wave >= 7 && (i === 3 || (wave >= 9 && i === 10))) {
+          queue.push('zombie_leader');
+          continue;
+        }
+        if (wave >= 11 && (i === 4 || (wave >= 13 && i === 11))) {
+          queue.push('fallen_angel');
+          continue;
+        }
         const roll = Math.random();
-        if (wave >= 2 && roll < 0.14) {
+        if (wave >= 11 && roll < 0.09) {
+          queue.push('fallen_angel');
+        } else if (wave >= 7 && roll < 0.17) {
+          queue.push('zombie_leader');
+        } else if (wave >= 3 && roll < 0.27) {
           queue.push('reaper');
-        } else if (wave >= 2 && roll < 0.26) {
+        } else if (wave >= 2 && roll < 0.37) {
           queue.push('volatile');
-        } else if (wave >= 3 && roll < 0.38) {
+        } else if (wave >= 3 && roll < 0.47) {
           queue.push('magma');
-        } else if (wave >= 2 && roll < 0.44) {
+        } else if (wave >= 2 && roll < 0.53) {
           queue.push('gold');
-        } else if (wave >= 2 && roll < 0.62) {
+        } else if (wave >= 2 && roll < 0.69) {
           queue.push('purple');
-        } else if (wave >= 2 && roll < 0.82) {
+        } else if (wave >= 2 && roll < 0.85) {
           queue.push('blue');
         } else if (wave === 1 && roll < 0.35) {
+          queue.push('blue');
+        } else if (wave === 2 && roll < 0.48) {
           queue.push('blue');
         } else {
           queue.push('green');
@@ -448,6 +506,30 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           highlight: '#E2E8F0',
           core: '#7F1D1D',
         },
+        zombie_leader: {
+          radius: 28,
+          hp: 215,
+          speed: 128,
+          damage: 24,
+          coins: 9,
+          xp: 34,
+          score: 180,
+          color: '#3F6212',
+          highlight: '#BEF264',
+          core: '#1A2E05',
+        },
+        fallen_angel: {
+          radius: 26,
+          hp: 260,
+          speed: 148,
+          damage: 22,
+          coins: 15,
+          xp: 48,
+          score: 260,
+          color: '#1E1B4B',
+          highlight: '#F59E0B',
+          core: '#7F1D1D',
+        },
         king: {
           radius: 50 + Math.min(20, bossTier * 3),
           hp: 520 + bossTier * 390,
@@ -499,12 +581,35 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         bossTier: d.isBoss ? bossTier : undefined,
         bossName: d.isBoss ? getBossTitle(eng.stats.wave) : undefined,
         bossZoneId: assignedZoneId,
+        doomTimer: variant === 'fallen_angel' ? 30.0 : undefined,
+        doomActivated: false,
+        doomStrikeCooldown: variant === 'fallen_angel' ? 5.0 : undefined,
+        chargeCooldown: d.isBoss ? 3.5 : undefined,
+        chargeTelegraphTimer: 0,
+        chargeActiveTimer: 0,
       });
     };
 
     const emitHudSnapshot = () => {
       const eng = engineRef.current;
       const boss = eng.slimes.find((s) => s.isBoss && !s.dying);
+      const fallenAngels = eng.slimes.filter((s) => s.variant === 'fallen_angel' && !s.dying);
+      const cursedAngels = fallenAngels.filter((fa) => Boolean(fa.doomActivated));
+      const fallenAngelAlert =
+        fallenAngels.length > 0
+          ? {
+              activeCount: fallenAngels.length,
+              minDoomRemaining: Math.min(
+                ...fallenAngels.map((fa) => Math.max(0, fa.doomTimer ?? 0))
+              ),
+              curseActive: cursedAngels.length > 0,
+              nextStrikeIn:
+                cursedAngels.length > 0
+                  ? Math.min(...cursedAngels.map((fa) => Math.max(0, fa.doomStrikeCooldown ?? 5)))
+                  : 5,
+            }
+          : null;
+
       const weaponsCopy: Record<WeaponId, WeaponProgress> = {
         pistol: { ...eng.weapons.pistol },
         shotgun: { ...eng.weapons.shotgun },
@@ -528,6 +633,13 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         slimesRemaining:
           eng.slimes.filter((s) => !s.dying).length + eng.waveState.toSpawn.length,
         bleedRemaining: Math.max(0, eng.player.bleedTimer),
+        stunRemaining: Math.max(0, eng.player.stunTimer),
+        fallenAngelAlert,
+        weaponBuffs: {
+          damageRemaining: Math.max(0, eng.player.weaponDamageBuffTimer),
+          explosiveRemaining: Math.max(0, eng.player.weaponExplosiveBuffTimer),
+          infiniteRemaining: Math.max(0, eng.player.weaponInfiniteBuffTimer),
+        },
       });
     };
 
@@ -550,6 +662,12 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         bleedTimer: 0,
         bleedTickTimer: 0,
         bleedWarnCooldown: 0,
+        stunTimer: 0,
+        knockbackVx: 0,
+        knockbackVy: 0,
+        weaponDamageBuffTimer: 0,
+        weaponExplosiveBuffTimer: 0,
+        weaponInfiniteBuffTimer: 0,
       };
       eng.stats = createInitialStats();
       eng.activeWeapon = 'pistol';
@@ -562,6 +680,7 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
       eng.floatingTexts = [];
       eng.bossZones = createBossZones();
       eng.zoneHazards = [];
+      eng.revealedEnemies = new Set<EnemyRevealId>();
       eng.camera = {
         x: WORLD_WIDTH / 2,
         y: WORLD_HEIGHT / 2,
@@ -581,6 +700,78 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
       resetGame: () => {
         resetInternalGame();
       },
+      revivePlayer: (bonusCoins = 0) => {
+        const eng = engineRef.current;
+        const p = eng.player;
+        eng.stats.hp = eng.stats.maxHp;
+        if (bonusCoins > 0) {
+          eng.stats.coins += bonusCoins;
+        }
+        p.invulnTimer = 3.5;
+        p.hurtFlash = 0;
+        p.bleedTimer = 0;
+        p.bleedTickTimer = 0;
+        p.stunTimer = 0;
+        p.knockbackVx = 0;
+        p.knockbackVy = 0;
+
+        // Clear nearby hostile projectiles and repel nearby enemies safely
+        eng.projectiles = eng.projectiles.filter((proj) => !proj.fromEnemy);
+        for (const s of eng.slimes) {
+          if (s.dying) continue;
+          const dist = Math.hypot(s.x - p.x, s.y - p.y);
+          if (dist < 280) {
+            const ang = Math.atan2(s.y - p.y, s.x - p.x);
+            s.vx += Math.cos(ang) * 420;
+            s.vy += Math.sin(ang) * 420;
+          }
+        }
+
+        eng.particles.push({
+          x: p.x,
+          y: p.y,
+          vx: 0,
+          vy: 0,
+          radius: 18,
+          color: '#FDE047',
+          alpha: 0.95,
+          life: 0.65,
+          maxLife: 0.65,
+          kind: 'ring',
+          ringMaxRadius: 240,
+        });
+        for (let i = 0; i < 28; i++) {
+          const ang = Math.random() * Math.PI * 2;
+          const spd = 80 + Math.random() * 200;
+          eng.particles.push({
+            x: p.x,
+            y: p.y,
+            vx: Math.cos(ang) * spd,
+            vy: Math.sin(ang) * spd,
+            radius: 3 + Math.random() * 3.5,
+            color: i % 2 === 0 ? '#FDE047' : '#C084FC',
+            alpha: 1,
+            life: 0.55,
+            maxLife: 0.55,
+            kind: 'spark',
+          });
+        }
+        eng.floatingTexts.push({
+          id: eng.nextEntityId++,
+          x: p.x,
+          y: p.y - 38,
+          text:
+            bonusCoins > 0
+              ? `¡Bendición Suprema! +100% HP · +${bonusCoins} Monedas`
+              : '¡Bendición Divina! +100% HP',
+          color: '#FDE047',
+          life: 1.8,
+          maxLife: 1.8,
+          scale: 1.35,
+        });
+        soundEngine.playDivineBlessing();
+        emitHudSnapshot();
+      },
       selectWeapon: (id: WeaponId) => {
         const eng = engineRef.current;
         if (eng.weapons[id].unlocked) {
@@ -597,6 +788,8 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         prog.unlocked = true;
         prog.ammo = def.magSize;
         eng.activeWeapon = id;
+        const unlockedCount = Object.values(eng.weapons).filter((w) => w.unlocked).length;
+        onProgressEvent({ weaponsUnlocked: unlockedCount });
         soundEngine.playCoin();
         emitHudSnapshot();
         return true;
@@ -606,9 +799,15 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         const def = WEAPONS[id];
         const prog = eng.weapons[id];
         const cost = getWeaponUpgradeCost(def, prog.upgradeLevel);
-        if (!prog.unlocked || prog.upgradeLevel >= 5 || eng.stats.coins < cost) return false;
+        if (!prog.unlocked || prog.upgradeLevel >= WEAPON_MAX_LEVEL || eng.stats.coins < cost) {
+          return false;
+        }
         eng.stats.coins -= cost;
         prog.upgradeLevel += 1;
+        prog.ammo = def.magSize;
+        prog.reloading = false;
+        prog.reloadProgress = 0;
+        onProgressEvent({ weaponUpgradeLevel: prog.upgradeLevel });
         soundEngine.playLevelUp();
         emitHudSnapshot();
         return true;
@@ -736,9 +935,9 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           }
         }
 
-        // Dash
+        // Dash (disabled while stunned against wall)
         if (code === 'Space' || code === 'ShiftLeft' || code === 'ShiftRight') {
-          if (eng.player.dashCooldown <= 0 && eng.player.dashTimer <= 0) {
+          if (eng.player.stunTimer <= 0 && eng.player.dashCooldown <= 0 && eng.player.dashTimer <= 0) {
             let dx = 0;
             let dy = 0;
             if (eng.input.keys.has('KeyW') || eng.input.keys.has('ArrowUp')) dy -= 1;
@@ -817,7 +1016,13 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         });
       };
 
-      const triggerExplosion = (x: number, y: number, radius: number, damage: number) => {
+      const triggerExplosion = (
+        x: number,
+        y: number,
+        radius: number,
+        damage: number,
+        ringColor = '#34D399'
+      ) => {
         const eng = engineRef.current;
         soundEngine.playExplosion();
         eng.camera.shake = Math.min(14, eng.camera.shake + 8);
@@ -828,7 +1033,7 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           vx: 0,
           vy: 0,
           radius: 8,
-          color: '#34D399',
+          color: ringColor,
           alpha: 0.9,
           life: 0.34,
           maxLife: 0.34,
@@ -845,7 +1050,7 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             vx: Math.cos(ang) * spd,
             vy: Math.sin(ang) * spd,
             radius: 3 + Math.random() * 5,
-            color: i % 2 === 0 ? '#34D399' : '#FDE047',
+            color: i % 2 === 0 ? ringColor : '#FDE047',
             alpha: 1,
             life: 0.3 + Math.random() * 0.25,
             maxLife: 0.55,
@@ -863,6 +1068,22 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         }
       };
 
+      const handlePlayerDeath = () => {
+        const eng = engineRef.current;
+        emitHudSnapshot();
+        // 1% probability to revive with +1000 coins; 5% probability to revive normally
+        const roll = Math.random();
+        if (roll < 0.01) {
+          onProgressEvent({});
+          onDivineRevive(eng.stats.wave, 1000);
+        } else if (roll < 0.06) {
+          onProgressEvent({});
+          onDivineRevive(eng.stats.wave, 0);
+        } else {
+          onGameOver({ ...eng.stats });
+        }
+      };
+
       const killSlime = (slime: Slime) => {
         const eng = engineRef.current;
         if (slime.dying) return;
@@ -872,6 +1093,14 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
 
         eng.stats.kills += 1;
         eng.stats.score += slime.scoreReward;
+        onProgressEvent({
+          kills: 1,
+          bosses: slime.isBoss ? 1 : 0,
+          fallenAngelsKilled: slime.variant === 'fallen_angel' ? 1 : 0,
+          reapersKilled: slime.variant === 'reaper' ? 1 : 0,
+          zombieLeadersKilled: slime.variant === 'zombie_leader' ? 1 : 0,
+          score: eng.stats.score,
+        });
 
         if (slime.isBoss) {
           for (const z of eng.bossZones) {
@@ -983,11 +1212,8 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           });
         }
 
-        // Occasional small health orb when player is injured
-        if (
-          eng.stats.hp < eng.stats.maxHp &&
-          (slime.isBoss || Math.random() < 0.08)
-        ) {
+        // 20% chance for slimes to drop a medkit healing 30 HP (guaranteed on bosses)
+        if (slime.isBoss || Math.random() < 0.2) {
           const ang = Math.random() * Math.PI * 2;
           eng.pickups.push({
             id: eng.nextEntityId++,
@@ -996,11 +1222,42 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             y: slime.y,
             vx: Math.cos(ang) * 75,
             vy: Math.sin(ang) * 75,
-            value: slime.isBoss ? 35 : 14,
-            radius: 8,
+            value: 30,
+            radius: 9,
             magnetized: false,
             bobPhase: Math.random() * Math.PI * 2,
-            lifeTimer: 25,
+            lifeTimer: 30,
+          });
+        }
+
+        // Temporary 10s weapon power-up drops from any enemy (higher rate on elites & guaranteed on bosses)
+        const isElite =
+          slime.variant === 'purple' ||
+          slime.variant === 'zombie_leader' ||
+          slime.variant === 'fallen_angel' ||
+          slime.variant === 'reaper' ||
+          slime.variant === 'gold';
+        const buffChance = slime.isBoss ? 1.0 : isElite ? 0.22 : 0.09;
+        if (Math.random() < buffChance) {
+          const buffPool: Array<'weapon_damage' | 'weapon_explosive' | 'weapon_infinite'> = [
+            'weapon_damage',
+            'weapon_explosive',
+            'weapon_infinite',
+          ];
+          const chosenBuff = buffPool[Math.floor(Math.random() * buffPool.length)];
+          const ang = Math.random() * Math.PI * 2;
+          eng.pickups.push({
+            id: eng.nextEntityId++,
+            type: chosenBuff,
+            x: slime.x,
+            y: slime.y,
+            vx: Math.cos(ang) * 90,
+            vy: Math.sin(ang) * 90,
+            value: 10,
+            radius: 12,
+            magnetized: false,
+            bobPhase: Math.random() * Math.PI * 2,
+            lifeTimer: 26,
           });
         }
       };
@@ -1054,8 +1311,7 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           soundEngine.playHurt();
           addFloatingText(p.x, p.y - 28, `-${blastDamage} ¡EXPLOSIÓN!`, '#EF4444', 1.25);
           if (eng.stats.hp <= 0) {
-            emitHudSnapshot();
-            onGameOver({ ...eng.stats });
+            handlePlayerDeath();
           }
         }
 
@@ -1078,7 +1334,12 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         const eng = engineRef.current;
         slime.hp -= dmg;
         slime.hitFlashTimer = 0.09;
-        const kbResist = slime.isBoss ? 0.15 : slime.variant === 'purple' ? 0.4 : 1;
+        const kbResist =
+          slime.isBoss || slime.variant === 'zombie_leader'
+            ? 0.15
+            : slime.variant === 'purple'
+              ? 0.4
+              : 1;
         slime.vx += Math.cos(knockAngle) * knockForce * kbResist;
         slime.vy += Math.sin(knockAngle) * knockForce * kbResist;
 
@@ -1123,25 +1384,40 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         const eng = engineRef.current;
         const wDef = WEAPONS[eng.activeWeapon];
         const wProg = eng.weapons[eng.activeWeapon];
+        const hasInfinite = eng.player.weaponInfiniteBuffTimer > 0;
+        const hasDamageBuff = eng.player.weaponDamageBuffTimer > 0;
+        const hasExplosiveBuff = eng.player.weaponExplosiveBuffTimer > 0;
 
-        if (wProg.reloading) return;
-        if (wProg.ammo <= 0) {
-          wProg.reloading = true;
+        if (hasInfinite) {
+          wProg.reloading = false;
           wProg.reloadProgress = 0;
-          return;
+          wProg.ammo = wDef.magSize;
+        } else {
+          if (wProg.reloading) return;
+          if (wProg.ammo <= 0) {
+            wProg.reloading = true;
+            wProg.reloadProgress = 0;
+            return;
+          }
+
+          wProg.ammo -= 1;
+          if (wProg.ammo <= 0) {
+            wProg.reloading = true;
+            wProg.reloadProgress = 0;
+          }
         }
 
-        wProg.ammo -= 1;
-        if (wProg.ammo <= 0) {
-          wProg.reloading = true;
-          wProg.reloadProgress = 0;
-        }
-
-        const upgradeDamageBoost = 1 + (wProg.upgradeLevel - 1) * 0.22;
-        const finalDamage = Math.round(
-          wDef.damage * upgradeDamageBoost * eng.stats.damageMultiplier
+        const baseDamage = computeWeaponDamage(
+          wDef,
+          wProg.upgradeLevel,
+          eng.stats.damageMultiplier,
+          eng.stats.wave
         );
-        const fireDelay = wDef.fireRateMs / eng.stats.fireRateMultiplier;
+        const finalDamage = hasDamageBuff ? baseDamage * 2 : baseDamage;
+        const upgradeFireBoost = 1 + (wProg.upgradeLevel - 1) * WEAPON_UPGRADE_FIRERATE_STEP;
+        const infiniteFireBoost = hasInfinite ? 1.35 : 1;
+        const fireDelay =
+          wDef.fireRateMs / (eng.stats.fireRateMultiplier * upgradeFireBoost * infiniteFireBoost);
         eng.fireTimerMs = fireDelay;
         eng.player.recoilOffset = wDef.id === 'shotgun' || wDef.id === 'grenade' ? 7 : 4;
         if (wDef.id === 'shotgun' || wDef.id === 'grenade' || wDef.id === 'laser') {
@@ -1164,13 +1440,20 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             vx: Math.cos(ang) * spd,
             vy: Math.sin(ang) * spd,
             radius: 2 + Math.random() * 2.5,
-            color: wDef.glowColor,
+            color: hasExplosiveBuff ? '#F97316' : hasDamageBuff ? '#F43F5E' : wDef.glowColor,
             alpha: 0.9,
             life: 0.11,
             maxLife: 0.11,
             kind: 'spark',
           });
         }
+
+        const scaledGrenadeRadius = Math.round(
+          wDef.explosionRadius * (1 + (wProg.upgradeLevel - 1) * 0.08)
+        );
+        const projExplosionRadius = hasExplosiveBuff
+          ? Math.max(scaledGrenadeRadius, 105)
+          : scaledGrenadeRadius;
 
         for (let i = 0; i < wDef.pellets; i++) {
           const offsetAngle = (Math.random() - 0.5) * wDef.spreadRad;
@@ -1189,11 +1472,12 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             vy: Math.sin(angle) * speed,
             radius: wDef.projectileRadius,
             damage: finalDamage,
-            color: wDef.color,
-            trailColor: wDef.glowColor,
+            color: hasExplosiveBuff ? '#F97316' : hasDamageBuff ? '#F43F5E' : wDef.color,
+            trailColor: hasExplosiveBuff ? '#FDE047' : wDef.glowColor,
             pierceLeft: wDef.pierce,
             hitIds: new Set<number>(),
-            explosionRadius: wDef.explosionRadius,
+            explosionRadius: projExplosionRadius,
+            isExplosiveBuff: hasExplosiveBuff,
             distanceTraveled: 0,
             maxRange: wDef.rangePx,
             lifeTimer: wDef.rangePx / speed + 0.15,
@@ -1210,6 +1494,16 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         if (p.hurtFlash > 0) p.hurtFlash -= dt;
         if (p.dashCooldown > 0) p.dashCooldown -= dt;
         if (p.bleedWarnCooldown > 0) p.bleedWarnCooldown -= dt;
+        if (p.stunTimer > 0) p.stunTimer = Math.max(0, p.stunTimer - dt);
+        if (p.weaponDamageBuffTimer > 0) {
+          p.weaponDamageBuffTimer = Math.max(0, p.weaponDamageBuffTimer - dt);
+        }
+        if (p.weaponExplosiveBuffTimer > 0) {
+          p.weaponExplosiveBuffTimer = Math.max(0, p.weaponExplosiveBuffTimer - dt);
+        }
+        if (p.weaponInfiniteBuffTimer > 0) {
+          p.weaponInfiniteBuffTimer = Math.max(0, p.weaponInfiniteBuffTimer - dt);
+        }
         if (p.recoilOffset > 0) p.recoilOffset = Math.max(0, p.recoilOffset - dt * 32);
         if (eng.fireTimerMs > 0) eng.fireTimerMs -= dt * 1000;
         if (eng.camera.shake > 0) eng.camera.shake = Math.max(0, eng.camera.shake - dt * 28);
@@ -1240,8 +1534,7 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             p.hurtFlash = Math.max(p.hurtFlash, 0.14);
             addFloatingText(p.x, p.y - 24, `-${bleedDmg} Desangrado`, '#DC2626', 0.95);
             if (eng.stats.hp <= 0) {
-              emitHudSnapshot();
-              onGameOver({ ...eng.stats });
+              handlePlayerDeath();
               return;
             }
           }
@@ -1250,7 +1543,11 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         // Reload progression for active weapon
         const activeDef = WEAPONS[eng.activeWeapon];
         const activeProg = eng.weapons[eng.activeWeapon];
-        if (activeProg.reloading) {
+        if (p.weaponInfiniteBuffTimer > 0) {
+          activeProg.reloading = false;
+          activeProg.reloadProgress = 0;
+          activeProg.ammo = activeDef.magSize;
+        } else if (activeProg.reloading) {
           const reloadSpeed = eng.stats.fireRateMultiplier;
           activeProg.reloadProgress += (dt * 1000 * reloadSpeed) / activeDef.reloadMs;
           if (activeProg.reloadProgress >= 1) {
@@ -1260,9 +1557,24 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           }
         }
 
-        // Player Movement
+        // Apply external knockback impulse (e.g., Zombie Leader wall slam)
+        const hasKnockback = Math.hypot(p.knockbackVx, p.knockbackVy) > 18;
+        if (hasKnockback) {
+          p.x += p.knockbackVx * dt;
+          p.y += p.knockbackVy * dt;
+          const decay = Math.pow(0.015, dt);
+          p.knockbackVx *= decay;
+          p.knockbackVy *= decay;
+        } else {
+          p.knockbackVx = 0;
+          p.knockbackVy = 0;
+        }
+
+        // Player Movement (immobilized while stunned for 2s)
         const bleedSlow = p.bleedTimer > 0 ? 0.5 : 1;
-        if (p.dashTimer > 0) {
+        if (p.stunTimer > 0) {
+          p.dashTimer = 0;
+        } else if (p.dashTimer > 0) {
           p.dashTimer -= dt;
           p.x += p.dashDirX * DASH_SPEED * bleedSlow * dt;
           p.y += p.dashDirY * DASH_SPEED * bleedSlow * dt;
@@ -1298,10 +1610,33 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           p.y += moveY * speed * dt;
         }
 
-        // Clamp player to arena walls
+        // Clamp player to arena walls & emit impact sparks if slammed against wall
         const wallPad = PLAYER_RADIUS + 18;
-        p.x = Math.max(wallPad, Math.min(WORLD_WIDTH - wallPad, p.x));
-        p.y = Math.max(wallPad, Math.min(WORLD_HEIGHT - wallPad, p.y));
+        const clampedX = Math.max(wallPad, Math.min(WORLD_WIDTH - wallPad, p.x));
+        const clampedY = Math.max(wallPad, Math.min(WORLD_HEIGHT - wallPad, p.y));
+        if ((clampedX !== p.x || clampedY !== p.y) && hasKnockback) {
+          eng.camera.shake = Math.min(16, eng.camera.shake + 5);
+          p.knockbackVx = 0;
+          p.knockbackVy = 0;
+          for (let k = 0; k < 10; k++) {
+            const ang = Math.random() * Math.PI * 2;
+            const spd = 65 + Math.random() * 140;
+            eng.particles.push({
+              x: clampedX,
+              y: clampedY,
+              vx: Math.cos(ang) * spd,
+              vy: Math.sin(ang) * spd,
+              radius: 3 + Math.random() * 2.5,
+              color: k % 2 === 0 ? '#BEF264' : '#94A3B8',
+              alpha: 0.9,
+              life: 0.28,
+              maxLife: 0.28,
+              kind: 'spark',
+            });
+          }
+        }
+        p.x = clampedX;
+        p.y = clampedY;
 
         // Camera follow smoothly
         const viewW = window.innerWidth;
@@ -1445,8 +1780,7 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
               soundEngine.playHurt();
               addFloatingText(p.x, p.y - 26, `-${hz.damage}`, '#EF4444', 1.2);
               if (eng.stats.hp <= 0) {
-                emitHudSnapshot();
-                onGameOver({ ...eng.stats });
+                handlePlayerDeath();
                 return;
               }
             }
@@ -1454,13 +1788,16 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           }
         }
 
-        // Wave spawning
+        // Wave spawning (slower spawn cadence after round 6)
         if (eng.waveState.toSpawn.length > 0) {
           eng.waveState.spawnTimer -= dt;
           if (eng.waveState.spawnTimer <= 0) {
             const nextVariant = eng.waveState.toSpawn.shift()!;
             spawnSlime(nextVariant);
-            eng.waveState.spawnTimer = Math.max(0.18, 0.78 - eng.stats.wave * 0.045);
+            eng.waveState.spawnTimer =
+              eng.stats.wave > 6
+                ? Math.min(1.45, 0.95 + (eng.stats.wave - 6) * 0.05)
+                : Math.max(0.32, 0.78 - eng.stats.wave * 0.045);
           }
         } else if (eng.slimes.filter((s) => !s.dying).length === 0) {
           if (eng.waveState.betweenWaveTimer <= 0) {
@@ -1469,6 +1806,7 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             eng.waveState.betweenWaveTimer -= dt;
             if (eng.waveState.betweenWaveTimer <= 0) {
               eng.stats.wave += 1;
+              onProgressEvent({ wave: eng.stats.wave });
               eng.waveState.toSpawn = buildWaveQueue(eng.stats.wave);
               eng.waveState.spawnTimer = 0.35;
               eng.waveState.bannerText =
@@ -1480,6 +1818,25 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
                     }`
                   : `Oleada ${eng.stats.wave}`;
               eng.waveState.bannerTimer = 3.0;
+
+              if (eng.stats.wave === 3 && !eng.revealedEnemies.has('reaper')) {
+                eng.revealedEnemies.add('reaper');
+                emitHudSnapshot();
+                onNewEnemyReveal('reaper', eng.stats.wave);
+                return;
+              }
+              if (eng.stats.wave === 7 && !eng.revealedEnemies.has('zombie_leader')) {
+                eng.revealedEnemies.add('zombie_leader');
+                emitHudSnapshot();
+                onNewEnemyReveal('zombie_leader', eng.stats.wave);
+                return;
+              }
+              if (eng.stats.wave === 11 && !eng.revealedEnemies.has('fallen_angel')) {
+                eng.revealedEnemies.add('fallen_angel');
+                emitHudSnapshot();
+                onNewEnemyReveal('fallen_angel', eng.stats.wave);
+                return;
+              }
             }
           }
         }
@@ -1591,8 +1948,7 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
 
                 remove = true;
                 if (eng.stats.hp <= 0) {
-                  emitHudSnapshot();
-                  onGameOver({ ...eng.stats });
+                  handlePlayerDeath();
                   return;
                 }
               }
@@ -1605,12 +1961,27 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
                 proj.hitIds.add(slime.id);
 
                 if (proj.kind === 'grenade') {
-                  triggerExplosion(proj.x, proj.y, proj.explosionRadius, proj.damage);
+                  triggerExplosion(
+                    proj.x,
+                    proj.y,
+                    proj.explosionRadius,
+                    proj.damage,
+                    proj.isExplosiveBuff ? '#F97316' : '#34D399'
+                  );
                   remove = true;
                   break;
                 } else {
                   const angle = Math.atan2(proj.vy, proj.vx);
                   damageSlime(slime, proj.damage, angle, proj.kind === 'pellet' ? 140 : 95);
+                  if (proj.isExplosiveBuff && proj.explosionRadius > 0) {
+                    triggerExplosion(
+                      proj.x,
+                      proj.y,
+                      proj.explosionRadius,
+                      Math.round(proj.damage * 0.65),
+                      '#F97316'
+                    );
+                  }
                   if (proj.pierceLeft > 0) {
                     proj.pierceLeft -= 1;
                   } else {
@@ -1622,7 +1993,13 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             }
 
             if (remove && proj.kind === 'grenade' && proj.hitIds.size === 0) {
-              triggerExplosion(proj.x, proj.y, proj.explosionRadius, proj.damage);
+              triggerExplosion(
+                proj.x,
+                proj.y,
+                proj.explosionRadius,
+                proj.damage,
+                proj.isExplosiveBuff ? '#F97316' : '#34D399'
+              );
             }
           }
 
@@ -1714,6 +2091,97 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
                 kind: 'smoke',
               });
             }
+          } else if (s.variant === 'fallen_angel') {
+            if (dist < 150) {
+              const orbitSign = s.id % 2 === 0 ? 1 : -1;
+              dirX = (-dy / dist) * orbitSign * 0.7 + (dx / dist) * 0.3;
+              dirY = (dx / dist) * orbitSign * 0.7 + (dy / dist) * 0.3;
+            }
+            if (Math.random() < 0.3) {
+              eng.particles.push({
+                x: s.x + (Math.random() - 0.5) * 24,
+                y: s.y + (Math.random() - 0.5) * 18,
+                vx: (Math.random() - 0.5) * 26,
+                vy: -22 - Math.random() * 24,
+                radius: 2.5,
+                color: s.doomActivated ? '#EF4444' : '#F59E0B',
+                alpha: 0.7,
+                life: 0.35,
+                maxLife: 0.35,
+                kind: 'spark',
+              });
+            }
+          }
+
+          // Fallen Angel 30-second countdown -> 2-hit lethal judgment every 5 seconds
+          if (s.variant === 'fallen_angel') {
+            if (!s.doomActivated) {
+              s.doomTimer = Math.max(0, (s.doomTimer ?? 30) - dt);
+              if (s.doomTimer <= 0) {
+                s.doomActivated = true;
+                s.doomStrikeCooldown = 0.05;
+                addFloatingText(
+                  s.x,
+                  s.y - s.radius - 26,
+                  '¡TIEMPO AGOTADO! JUICIO DE 2 GOLPES',
+                  '#F59E0B',
+                  1.2
+                );
+              }
+            } else {
+              s.doomStrikeCooldown = (s.doomStrikeCooldown ?? 5) - dt;
+              if (s.doomStrikeCooldown <= 0) {
+                s.doomStrikeCooldown = 5.0;
+                if (p.invulnTimer <= 1.2) {
+                  const strikeDmg = Math.max(1, Math.ceil(eng.stats.maxHp * 0.5));
+                  eng.stats.hp = Math.max(0, eng.stats.hp - strikeDmg);
+                  p.hurtFlash = 0.4;
+                  eng.camera.shake = Math.min(18, eng.camera.shake + 10);
+                  soundEngine.playHurt();
+
+                  eng.particles.push({
+                    x: p.x,
+                    y: p.y,
+                    vx: 0,
+                    vy: 0,
+                    radius: 14,
+                    color: '#EF4444',
+                    alpha: 0.95,
+                    life: 0.4,
+                    maxLife: 0.4,
+                    kind: 'ring',
+                    ringMaxRadius: 84,
+                  });
+                  for (let k = 0; k < 16; k++) {
+                    const ang = Math.random() * Math.PI * 2;
+                    const spd = 70 + Math.random() * 170;
+                    eng.particles.push({
+                      x: p.x,
+                      y: p.y,
+                      vx: Math.cos(ang) * spd,
+                      vy: Math.sin(ang) * spd,
+                      radius: 2.8 + Math.random() * 2.5,
+                      color: k % 2 === 0 ? '#EF4444' : '#F59E0B',
+                      alpha: 0.95,
+                      life: 0.35,
+                      maxLife: 0.35,
+                      kind: 'spark',
+                    });
+                  }
+                  addFloatingText(
+                    p.x,
+                    p.y - 36,
+                    `-${strikeDmg} ¡JUICIO CAÍDO!`,
+                    '#F43F5E',
+                    1.25
+                  );
+                  if (eng.stats.hp <= 0) {
+                    handlePlayerDeath();
+                    return;
+                  }
+                }
+              }
+            }
           }
 
           let moveSpeed = s.speed;
@@ -1724,8 +2192,19 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             }
           }
 
-          s.vx += (dirX * moveSpeed - s.vx) * Math.min(1, dt * 6);
-          s.vy += (dirY * moveSpeed - s.vy) * Math.min(1, dt * 6);
+          if (s.isBoss && s.chargeTelegraphTimer && s.chargeTelegraphTimer > 0) {
+            // Telegraphing boss charge: coil & hold position briefly
+            s.vx *= 0.8;
+            s.vy *= 0.8;
+          } else if (s.isBoss && s.chargeActiveTimer && s.chargeActiveTimer > 0) {
+            const tier = s.bossTier ?? 1;
+            const chargeSpeed = Math.max(540, s.speed * 4.2 + tier * 35);
+            s.vx = (s.chargeDirX ?? dirX) * chargeSpeed;
+            s.vy = (s.chargeDirY ?? dirY) * chargeSpeed;
+          } else {
+            s.vx += (dirX * moveSpeed - s.vx) * Math.min(1, dt * 6);
+            s.vy += (dirY * moveSpeed - s.vy) * Math.min(1, dt * 6);
+          }
           s.x += s.vx * dt;
           s.y += s.vy * dt;
 
@@ -1814,12 +2293,75 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             }
           }
 
-          // Escalating Boss Combat Patterns every 2 waves
+          // Escalating Boss Combat Patterns + Boss Charge Attack ("Embestida") every 2 waves
           if (s.isBoss) {
             const tier = s.bossTier ?? 1;
+
+            // Boss Embestida state machine
+            if (s.chargeTelegraphTimer && s.chargeTelegraphTimer > 0) {
+              s.chargeTelegraphTimer -= dt;
+              if (Math.random() < 0.65) {
+                eng.particles.push({
+                  x: s.x + (Math.random() - 0.5) * s.radius * 1.4,
+                  y: s.y + (Math.random() - 0.5) * s.radius * 1.4,
+                  vx: (Math.random() - 0.5) * 60,
+                  vy: (Math.random() - 0.5) * 60,
+                  radius: 3.2,
+                  color: '#EF4444',
+                  alpha: 0.9,
+                  life: 0.25,
+                  maxLife: 0.25,
+                  kind: 'spark',
+                });
+              }
+              if (s.chargeTelegraphTimer <= 0) {
+                s.chargeTelegraphTimer = 0;
+                s.chargeActiveTimer = 0.52;
+                soundEngine.playBossCharge();
+                eng.camera.shake = Math.min(14, eng.camera.shake + 6);
+                addFloatingText(s.x, s.y - s.radius - 20, '¡EMBESTIDA!', '#EF4444', 1.3);
+              }
+            } else if (s.chargeActiveTimer && s.chargeActiveTimer > 0) {
+              s.chargeActiveTimer -= dt;
+              if (Math.random() < 0.85) {
+                eng.particles.push({
+                  x: s.x + (Math.random() - 0.5) * s.radius,
+                  y: s.y + (Math.random() - 0.5) * s.radius,
+                  vx: -(s.chargeDirX ?? 0) * 90 + (Math.random() - 0.5) * 50,
+                  vy: -(s.chargeDirY ?? 0) * 90 + (Math.random() - 0.5) * 50,
+                  radius: 4.5,
+                  color: s.highlightColor,
+                  alpha: 0.85,
+                  life: 0.3,
+                  maxLife: 0.3,
+                  kind: 'spark',
+                });
+              }
+              if (s.chargeActiveTimer <= 0) {
+                s.chargeActiveTimer = 0;
+                s.chargeCooldown = Math.max(3.6, 5.8 - tier * 0.4);
+                s.vx *= 0.35;
+                s.vy *= 0.35;
+              }
+            } else {
+              s.chargeCooldown = (s.chargeCooldown ?? 4.5) - dt;
+              if (s.chargeCooldown <= 0 && dist > 110 && dist < 640) {
+                s.chargeDirX = dx / dist;
+                s.chargeDirY = dy / dist;
+                s.chargeTelegraphTimer = 0.72;
+                addFloatingText(
+                  s.x,
+                  s.y - s.radius - 18,
+                  '¡SE PREPARA PARA EMBESTIR!',
+                  '#FDE047',
+                  1.1
+                );
+              }
+            }
+
             s.attackCooldown -= dt;
 
-            if (s.attackCooldown <= 0) {
+            if (s.attackCooldown <= 0 && !(s.chargeActiveTimer && s.chargeActiveTimer > 0)) {
               const cooldown = Math.max(1.25, 2.35 - tier * 0.22);
               s.attackCooldown = cooldown;
               const baseAng = Math.atan2(p.y - s.y, p.x - s.x);
@@ -1883,12 +2425,6 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
                   });
                 }
               }
-
-              // Tier 4+ Boss lunges aggressively toward player on volley
-              if (tier >= 4) {
-                s.vx += Math.cos(baseAng) * 280;
-                s.vy += Math.sin(baseAng) * 280;
-              }
             }
 
             // Tier 2+ Bosses summon fast small slimes & explosive slimes periodically
@@ -1922,15 +2458,46 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             p.hurtFlash = 0.28;
             eng.camera.shake = Math.min(14, eng.camera.shake + 7);
             soundEngine.playHurt();
-            addFloatingText(p.x, p.y - 26, `-${s.damage}`, '#EF4444', 1.15);
+
+            if (s.variant === 'zombie_leader') {
+              const pushAng = Math.atan2(p.y - s.y, p.x - s.x);
+              p.knockbackVx = Math.cos(pushAng) * 1150;
+              p.knockbackVy = Math.sin(pushAng) * 1150;
+              p.stunTimer = 2.0;
+              eng.camera.shake = Math.min(18, eng.camera.shake + 7);
+              addFloatingText(
+                p.x,
+                p.y - 34,
+                `-${s.damage} ¡EMPUJADO! Aturdido 2s`,
+                '#BEF264',
+                1.2
+              );
+              for (let k = 0; k < 14; k++) {
+                const ang = Math.random() * Math.PI * 2;
+                const spd = 70 + Math.random() * 160;
+                eng.particles.push({
+                  x: p.x,
+                  y: p.y,
+                  vx: Math.cos(ang) * spd,
+                  vy: Math.sin(ang) * spd,
+                  radius: 3 + Math.random() * 2.5,
+                  color: k % 2 === 0 ? '#BEF264' : '#EF4444',
+                  alpha: 0.95,
+                  life: 0.34,
+                  maxLife: 0.34,
+                  kind: 'spark',
+                });
+              }
+            } else {
+              addFloatingText(p.x, p.y - 26, `-${s.damage}`, '#EF4444', 1.15);
+            }
 
             // Push slime back slightly
             s.vx -= dirX * 180;
             s.vy -= dirY * 180;
 
             if (eng.stats.hp <= 0) {
-              emitHudSnapshot();
-              onGameOver({ ...eng.stats });
+              handlePlayerDeath();
               return;
             }
           }
@@ -1947,7 +2514,8 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           const dy = p.y - pk.y;
           const dist = Math.hypot(dx, dy) || 1;
 
-          const healBlocked = pk.type === 'health' && p.bleedTimer > 0;
+          const healBlocked =
+            pk.type === 'health' && (p.bleedTimer > 0 || eng.stats.hp >= eng.stats.maxHp);
           if (!healBlocked && dist <= eng.stats.magnetRadius) {
             pk.magnetized = true;
           } else if (healBlocked) {
@@ -1967,6 +2535,9 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           pk.y += pk.vy * dt;
 
           if (dist <= PLAYER_RADIUS + pk.radius + 8) {
+            if (pk.type === 'health' && eng.stats.hp >= eng.stats.maxHp) {
+              continue;
+            }
             if (healBlocked) {
               if (p.bleedWarnCooldown <= 0) {
                 addFloatingText(p.x, p.y - 30, '¡Desangrado! Sin curación', '#F87171', 0.95);
@@ -2003,6 +2574,7 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
               if (eng.stats.xp >= eng.stats.xpToNext) {
                 eng.stats.xp -= eng.stats.xpToNext;
                 eng.stats.level += 1;
+                onProgressEvent({ level: eng.stats.level });
                 eng.stats.xpToNext = Math.round(eng.stats.xpToNext * 1.42 + 40);
                 leveledUpNow = true;
                 soundEngine.playLevelUp();
@@ -2034,6 +2606,23 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
               if (healed > 0) {
                 addFloatingText(p.x, p.y - 22, `+${healed} HP`, '#10B981', 1);
               }
+            } else if (pk.type === 'weapon_damage') {
+              p.weaponDamageBuffTimer = 10.0;
+              soundEngine.playWeaponPowerup();
+              addFloatingText(p.x, p.y - 30, '¡DAÑO x2 (10s)!', '#F43F5E', 1.25);
+            } else if (pk.type === 'weapon_explosive') {
+              p.weaponExplosiveBuffTimer = 10.0;
+              soundEngine.playWeaponPowerup();
+              addFloatingText(p.x, p.y - 30, '¡DISPARO EXPLOSIVO (10s)!', '#F97316', 1.25);
+            } else if (pk.type === 'weapon_infinite') {
+              p.weaponInfiniteBuffTimer = 10.0;
+              const activeDef = WEAPONS[eng.activeWeapon];
+              const activeProg = eng.weapons[eng.activeWeapon];
+              activeProg.reloading = false;
+              activeProg.reloadProgress = 0;
+              activeProg.ammo = activeDef.magSize;
+              soundEngine.playWeaponPowerup();
+              addFloatingText(p.x, p.y - 30, '¡BALAS INFINITAS (10s)!', '#38BDF8', 1.25);
             }
             eng.pickups.splice(i, 1);
           } else if (pk.lifeTimer <= 0) {
@@ -2257,13 +2846,69 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             ctx.arc(-2, -2, pk.radius * 0.38, 0, Math.PI * 2);
             ctx.fill();
           } else if (pk.type === 'health') {
-            ctx.fillStyle = '#EF4444';
+            ctx.fillStyle = 'rgba(16, 185, 129, 0.25)';
+            ctx.beginPath();
+            ctx.arc(0, 0, pk.radius + 5, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = '#F8FAFC';
+            ctx.strokeStyle = '#0F172A';
+            ctx.lineWidth = 1.6;
+            ctx.beginPath();
+            ctx.roundRect(-9, -7, 18, 14, 3);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = '#10B981';
+            ctx.fillRect(-2, -4.5, 4, 9);
+            ctx.fillRect(-4.5, -2, 9, 4);
+          } else if (
+            pk.type === 'weapon_damage' ||
+            pk.type === 'weapon_explosive' ||
+            pk.type === 'weapon_infinite'
+          ) {
+            const buffColor =
+              pk.type === 'weapon_damage'
+                ? '#F43F5E'
+                : pk.type === 'weapon_explosive'
+                  ? '#F97316'
+                  : '#38BDF8';
+            const buffLabel =
+              pk.type === 'weapon_damage'
+                ? '2x DAÑO'
+                : pk.type === 'weapon_explosive'
+                  ? 'EXPLOSIVO'
+                  : 'BALAS ∞';
+
+            // Glowing rotating pulse ring
+            ctx.fillStyle = `${buffColor}33`;
+            ctx.beginPath();
+            ctx.arc(0, 0, pk.radius + 7 + Math.sin(pk.bobPhase * 1.4) * 2, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = '#0F172A';
+            ctx.strokeStyle = buffColor;
+            ctx.lineWidth = 2.4;
             ctx.beginPath();
             ctx.arc(0, 0, pk.radius, 0, Math.PI * 2);
             ctx.fill();
-            ctx.fillStyle = '#FFFFFF';
-            ctx.fillRect(-1.5, -4.5, 3, 9);
-            ctx.fillRect(-4.5, -1.5, 9, 3);
+            ctx.stroke();
+
+            // Inner symbol
+            ctx.fillStyle = buffColor;
+            ctx.font = '800 10px "JetBrains Mono", monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(
+              pk.type === 'weapon_damage' ? '2x' : pk.type === 'weapon_explosive' ? 'EXP' : '∞',
+              0,
+              0.5
+            );
+
+            // Floating mini tag
+            ctx.font = '700 9px "Outfit", sans-serif';
+            ctx.fillStyle = '#F8FAFC';
+            ctx.fillText(buffLabel, 0, -pk.radius - 7);
           }
           ctx.restore();
         }
@@ -2446,6 +3091,321 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             continue;
           }
 
+          if (s.variant === 'zombie_leader') {
+            if (s.dying) {
+              const p = Math.min(1, s.dissolveTimer / s.dissolveDuration);
+              ctx.globalAlpha = Math.max(0, 1 - p);
+              ctx.scale(1 + p * 0.25, 1 - p * 0.35);
+            }
+
+            const stompBob = s.dying ? 0 : Math.abs(Math.sin(s.squishPhase * 0.6)) * -3;
+            const aimAng = Math.atan2(eng.player.y - s.y, eng.player.x - s.x);
+            const flagWave = Math.sin(s.squishPhase * 0.9) * 5;
+
+            // Ground shadow
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.58)';
+            ctx.beginPath();
+            ctx.ellipse(0, s.radius * 0.82, s.radius * 1.05, s.radius * 0.38, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.translate(0, stompBob);
+
+            // War banner pole & fluttering crimson battle flag strapped behind leader
+            ctx.save();
+            ctx.strokeStyle = '#78350F';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(-s.radius * 0.55, s.radius * 0.4);
+            ctx.lineTo(-s.radius * 0.72, -s.radius * 2.15);
+            ctx.stroke();
+
+            ctx.fillStyle = '#F59E0B';
+            ctx.beginPath();
+            ctx.arc(-s.radius * 0.72, -s.radius * 2.18, 4.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Fluttering flag cloth
+            ctx.fillStyle = s.hitFlashTimer > 0 ? '#FFFFFF' : '#991B1B';
+            ctx.strokeStyle = '#FCA5A5';
+            ctx.lineWidth = 1.4;
+            ctx.beginPath();
+            ctx.moveTo(-s.radius * 0.7, -s.radius * 2.08);
+            ctx.quadraticCurveTo(
+              -s.radius * 0.1,
+              -s.radius * 2.22 + flagWave,
+              s.radius * 0.45,
+              -s.radius * 1.98 + flagWave * 0.6
+            );
+            ctx.lineTo(s.radius * 0.25, -s.radius * 1.65 + flagWave * 0.5);
+            ctx.lineTo(s.radius * 0.48, -s.radius * 1.38 + flagWave);
+            ctx.quadraticCurveTo(
+              -s.radius * 0.12,
+              -s.radius * 1.52 + flagWave * 0.4,
+              -s.radius * 0.7,
+              -s.radius * 1.4
+            );
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+
+            // Skull emblem on banner
+            if (s.hitFlashTimer <= 0) {
+              ctx.fillStyle = '#FEF2F2';
+              ctx.beginPath();
+              ctx.arc(-s.radius * 0.16, -s.radius * 1.74 + flagWave * 0.45, 5, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            ctx.restore();
+
+            // Menacing warlord aura
+            if (!s.dying) {
+              ctx.strokeStyle = 'rgba(190, 242, 100, 0.35)';
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.arc(0, 0, s.radius * 1.18, 0, Math.PI * 2);
+              ctx.stroke();
+            }
+
+            // Hulking armored shoulders & rotting coat
+            ctx.fillStyle = s.hitFlashTimer > 0 ? '#FFFFFF' : '#1E293B';
+            ctx.strokeStyle = '#020617';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.ellipse(0, 2, s.radius * 0.98, s.radius * 0.85, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+
+            // Iron shoulder pauldrons
+            ctx.fillStyle = s.hitFlashTimer > 0 ? '#FFFFFF' : '#475569';
+            ctx.beginPath();
+            ctx.arc(-s.radius * 0.72, -2, s.radius * 0.36, 0, Math.PI * 2);
+            ctx.arc(s.radius * 0.72, -2, s.radius * 0.36, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Zombie head
+            ctx.fillStyle = s.hitFlashTimer > 0 ? '#FFFFFF' : '#4D7C0F';
+            ctx.beginPath();
+            ctx.arc(0, -4, s.radius * 0.56, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = '#1A2E05';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            if (!s.dying && s.hitFlashTimer <= 0) {
+              const lookX = Math.cos(aimAng) * 3;
+              const lookY = Math.sin(aimAng) * 2.5;
+
+              // Glowing lime-yellow zombie eyes
+              ctx.fillStyle = '#020617';
+              ctx.beginPath();
+              ctx.arc(-6 + lookX, -6 + lookY, 3.8, 0, Math.PI * 2);
+              ctx.arc(6 + lookX, -6 + lookY, 3.8, 0, Math.PI * 2);
+              ctx.fill();
+
+              ctx.fillStyle = '#BEF264';
+              ctx.beginPath();
+              ctx.arc(-6 + lookX, -6 + lookY, 2.1, 0, Math.PI * 2);
+              ctx.arc(6 + lookX, -6 + lookY, 2.1, 0, Math.PI * 2);
+              ctx.fill();
+
+              // Jagged snarling mouth
+              ctx.fillStyle = '#020617';
+              ctx.fillRect(-7 + lookX * 0.5, 2 + lookY * 0.5, 14, 5);
+              ctx.fillStyle = '#E2E8F0';
+              ctx.fillRect(-5 + lookX * 0.5, 2 + lookY * 0.5, 2.2, 2.5);
+              ctx.fillRect(2.5 + lookX * 0.5, 2 + lookY * 0.5, 2.2, 2.5);
+
+              // Heavy charging fists aimed forward
+              const fx = Math.cos(aimAng) * (s.radius * 0.88);
+              const fy = Math.sin(aimAng) * (s.radius * 0.88);
+              const perpX = -Math.sin(aimAng) * 12;
+              const perpY = Math.cos(aimAng) * 12;
+              ctx.fillStyle = '#65A30D';
+              ctx.strokeStyle = '#020617';
+              ctx.lineWidth = 1.8;
+              ctx.beginPath();
+              ctx.arc(fx + perpX, fy + perpY, 6.5, 0, Math.PI * 2);
+              ctx.arc(fx - perpX, fy - perpY, 6.5, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+            }
+
+            ctx.restore();
+
+            if (!s.dying && s.hp < s.maxHp) {
+              const barW = Math.max(42, s.radius * 1.7);
+              const barH = 5;
+              const bx = s.x - barW / 2;
+              const by = s.y - s.radius - 16;
+              ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+              ctx.fillRect(bx - 1, by - 1, barW + 2, barH + 2);
+              ctx.fillStyle = '#84CC16';
+              ctx.fillRect(bx, by, barW * Math.max(0, s.hp / s.maxHp), barH);
+            }
+            continue;
+          }
+
+          if (s.variant === 'fallen_angel') {
+            if (s.dying) {
+              const p = Math.min(1, s.dissolveTimer / s.dissolveDuration);
+              ctx.globalAlpha = Math.max(0, 1 - p);
+              ctx.translate(0, -p * 24);
+              ctx.scale(1 + p * 0.3, 1 + p * 0.3);
+            }
+
+            const hoverY = s.dying ? 0 : Math.sin(s.squishPhase * 0.9) * 5;
+            const wingFlap = s.dying ? 0 : Math.sin(s.squishPhase * 1.4) * 0.22;
+            const aimAng = Math.atan2(eng.player.y - s.y, eng.player.x - s.x);
+
+            // Ground shadow
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+            ctx.beginPath();
+            ctx.ellipse(0, s.radius * 1.05, s.radius * 1.15, s.radius * 0.38, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.translate(0, hoverY);
+
+            // Judgment aura
+            if (!s.dying) {
+              ctx.fillStyle = s.doomActivated
+                ? 'rgba(239, 68, 68, 0.25)'
+                : 'rgba(245, 158, 11, 0.18)';
+              ctx.beginPath();
+              ctx.arc(0, 0, s.radius * 1.55, 0, Math.PI * 2);
+              ctx.fill();
+            }
+
+            // Left & right obsidian feathered wings
+            for (const side of [-1, 1]) {
+              ctx.save();
+              ctx.scale(side, 1);
+              ctx.rotate(wingFlap);
+              ctx.fillStyle = s.hitFlashTimer > 0 ? '#FFFFFF' : '#0F172A';
+              ctx.strokeStyle = s.doomActivated ? '#EF4444' : '#F59E0B';
+              ctx.lineWidth = 1.6;
+              ctx.beginPath();
+              ctx.moveTo(6, -6);
+              ctx.quadraticCurveTo(s.radius * 1.45, -s.radius * 1.45, s.radius * 2.1, -s.radius * 0.55);
+              ctx.lineTo(s.radius * 1.65, -s.radius * 0.05);
+              ctx.lineTo(s.radius * 1.9, s.radius * 0.3);
+              ctx.lineTo(s.radius * 1.35, s.radius * 0.55);
+              ctx.lineTo(8, s.radius * 0.45);
+              ctx.closePath();
+              ctx.fill();
+              ctx.stroke();
+              ctx.restore();
+            }
+
+            // Dark indigo/gold robes
+            ctx.fillStyle = s.hitFlashTimer > 0 ? '#FFFFFF' : '#1E1B4B';
+            ctx.strokeStyle = '#F59E0B';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(-s.radius * 0.55, -s.radius * 0.35);
+            ctx.lineTo(s.radius * 0.55, -s.radius * 0.35);
+            ctx.lineTo(s.radius * 0.78, s.radius * 0.92);
+            ctx.lineTo(0, s.radius * 0.68);
+            ctx.lineTo(-s.radius * 0.78, s.radius * 0.92);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+
+            // Armored chest sigil
+            if (s.hitFlashTimer <= 0) {
+              ctx.fillStyle = s.doomActivated ? '#EF4444' : '#F59E0B';
+              ctx.beginPath();
+              ctx.moveTo(0, -6);
+              ctx.lineTo(6, 4);
+              ctx.lineTo(0, 14);
+              ctx.lineTo(-6, 4);
+              ctx.closePath();
+              ctx.fill();
+            }
+
+            // Pale hooded head
+            ctx.fillStyle = s.hitFlashTimer > 0 ? '#FFFFFF' : '#312E81';
+            ctx.beginPath();
+            ctx.arc(0, -s.radius * 0.52, s.radius * 0.44, 0, Math.PI * 2);
+            ctx.fill();
+
+            if (!s.dying && s.hitFlashTimer <= 0) {
+              // Glowing crimson judgment eyes
+              const lookX = Math.cos(aimAng) * 2.5;
+              const lookY = Math.sin(aimAng) * 2;
+              ctx.fillStyle = '#EF4444';
+              ctx.beginPath();
+              ctx.arc(-4.5 + lookX, -s.radius * 0.52 + lookY, 2.3, 0, Math.PI * 2);
+              ctx.arc(4.5 + lookX, -s.radius * 0.52 + lookY, 2.3, 0, Math.PI * 2);
+              ctx.fill();
+
+              // Cracked golden halo above head
+              ctx.strokeStyle = s.doomActivated ? '#EF4444' : '#FDE047';
+              ctx.lineWidth = 2.6;
+              ctx.beginPath();
+              ctx.ellipse(0, -s.radius * 1.18, s.radius * 0.58, s.radius * 0.18, 0, 0.25, Math.PI * 1.9);
+              ctx.stroke();
+
+              // Flaming judgment sword
+              const swordSide = Math.cos(aimAng) >= 0 ? 1 : -1;
+              ctx.save();
+              ctx.translate(swordSide * (s.radius * 0.72), 0);
+              ctx.rotate(swordSide * 0.35);
+              ctx.fillStyle = s.doomActivated ? '#EF4444' : '#F59E0B';
+              ctx.fillRect(-2, -26, 4, 34);
+              ctx.fillStyle = '#FDE047';
+              ctx.fillRect(-7, 2, 14, 3);
+              ctx.restore();
+            }
+
+            ctx.restore();
+
+            if (!s.dying) {
+              // 30s Countdown Ring + Timer above Fallen Angel
+              const remaining = s.doomActivated
+                ? Math.max(0, s.doomStrikeCooldown ?? 5)
+                : Math.max(0, s.doomTimer ?? 30);
+              const progress = s.doomActivated ? remaining / 5 : remaining / 30;
+              const ringY = s.y - s.radius - 34;
+
+              ctx.save();
+              ctx.fillStyle = 'rgba(2, 6, 23, 0.85)';
+              ctx.beginPath();
+              ctx.arc(s.x, ringY, 13, 0, Math.PI * 2);
+              ctx.fill();
+
+              ctx.strokeStyle = s.doomActivated ? '#EF4444' : '#F59E0B';
+              ctx.lineWidth = 3;
+              ctx.beginPath();
+              ctx.arc(
+                s.x,
+                ringY,
+                13,
+                -Math.PI / 2,
+                -Math.PI / 2 + Math.PI * 2 * Math.min(1, progress)
+              );
+              ctx.stroke();
+
+              ctx.font = '800 10px "JetBrains Mono", monospace';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillStyle = s.doomActivated ? '#FCA5A5' : '#FEF08A';
+              ctx.fillText(`${Math.ceil(remaining)}`, s.x, ringY + 0.5);
+              ctx.restore();
+
+              if (s.hp < s.maxHp) {
+                const barW = Math.max(44, s.radius * 1.8);
+                const barH = 5;
+                const bx = s.x - barW / 2;
+                const by = s.y - s.radius - 16;
+                ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+                ctx.fillRect(bx - 1, by - 1, barW + 2, barH + 2);
+                ctx.fillStyle = '#F59E0B';
+                ctx.fillRect(bx, by, barW * Math.max(0, s.hp / s.maxHp), barH);
+              }
+            }
+            continue;
+          }
+
           if (s.dying) {
             const p = Math.min(1, s.dissolveTimer / s.dissolveDuration);
             // Dissolve: expands outward, flattens slightly, and fades to 0 alpha
@@ -2453,6 +3413,30 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             ctx.globalAlpha = Math.max(0, 1 - p);
             ctx.scale(dissolveScale * 1.15, dissolveScale * (1 - p * 0.25));
           } else {
+            // Boss Charge Attack ("Embestida") telegraph path & active surge ring
+            if (s.isBoss && s.chargeTelegraphTimer && s.chargeTelegraphTimer > 0) {
+              const dirX = s.chargeDirX ?? 1;
+              const dirY = s.chargeDirY ?? 0;
+              const pathLen = 460;
+              ctx.save();
+              ctx.rotate(Math.atan2(dirY, dirX));
+              ctx.fillStyle = 'rgba(239, 68, 68, 0.16)';
+              ctx.fillRect(0, -s.radius * 0.85, pathLen, s.radius * 1.7);
+              ctx.strokeStyle = 'rgba(253, 224, 71, 0.85)';
+              ctx.lineWidth = 2.5;
+              ctx.setLineDash([12, 8]);
+              ctx.strokeRect(0, -s.radius * 0.85, pathLen, s.radius * 1.7);
+              ctx.restore();
+            } else if (s.isBoss && s.chargeActiveTimer && s.chargeActiveTimer > 0) {
+              ctx.save();
+              ctx.strokeStyle = '#EF4444';
+              ctx.lineWidth = 4;
+              ctx.beginPath();
+              ctx.arc(0, 0, s.radius + 10, 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.restore();
+            }
+
             const sx = 1 + Math.sin(s.squishPhase) * 0.09;
             const sy = 1 - Math.sin(s.squishPhase) * 0.09;
             ctx.scale(sx, sy);
@@ -2781,14 +3765,92 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           ctx.restore();
         }
 
-        // Draw Player (hidden in Title Menu)
-        if (gameStateRef.current !== 'TITLE_MENU') {
+        // Draw Player (hidden in Title Menu and Cinematics)
+        if (
+          gameStateRef.current !== 'TITLE_MENU' &&
+          gameStateRef.current !== 'CINEMATIC' &&
+          gameStateRef.current !== 'ENEMY_REVEAL' &&
+          gameStateRef.current !== 'DIVINE_REVIVE' &&
+          gameStateRef.current !== 'DEATH_CINEMATIC'
+        ) {
           const p = eng.player;
           const wDef = WEAPONS[eng.activeWeapon];
           const wProg = eng.weapons[eng.activeWeapon];
+          const skinDef = SKINS[selectedSkinRef.current] ?? SKINS.sentinel;
 
           ctx.save();
           ctx.translate(p.x, p.y);
+
+          // Special skin aura underneath player
+          if (
+            skinDef.id === 'celestial_god' ||
+            skinDef.id === 'eternal_monarch' ||
+            skinDef.id === 'omnipotent_one' ||
+            skinDef.id === 'galaxy_phantom' ||
+            skinDef.id === 'chronos_sentinel'
+          ) {
+            ctx.strokeStyle =
+              skinDef.id === 'eternal_monarch'
+                ? 'rgba(244, 63, 94, 0.78)'
+                : skinDef.id === 'galaxy_phantom'
+                  ? 'rgba(168, 85, 247, 0.8)'
+                  : skinDef.id === 'chronos_sentinel'
+                    ? 'rgba(94, 234, 212, 0.78)'
+                    : 'rgba(253, 224, 71, 0.78)';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.arc(
+              0,
+              0,
+              PLAYER_RADIUS + 7 + Math.sin(performance.now() * 0.006) * 2,
+              0,
+              Math.PI * 2
+            );
+            ctx.stroke();
+            if (skinDef.id === 'omnipotent_one' || skinDef.id === 'galaxy_phantom') {
+              ctx.strokeStyle = skinDef.secondaryColor;
+              ctx.lineWidth = 1.6;
+              ctx.beginPath();
+              ctx.arc(0, 0, PLAYER_RADIUS + 12, 0, Math.PI * 2);
+              ctx.stroke();
+            }
+          } else if (
+            skinDef.id === 'shadow_reaper' ||
+            skinDef.id === 'abyssal_knight' ||
+            skinDef.id === 'angel_slayer' ||
+            skinDef.id === 'void_harbinger' ||
+            skinDef.id === 'arcane_archon' ||
+            skinDef.id === 'seraph_bane' ||
+            skinDef.id === 'eclipse_valkyrie'
+          ) {
+            ctx.fillStyle =
+              skinDef.id === 'angel_slayer' || skinDef.id === 'eclipse_valkyrie'
+                ? 'rgba(245, 158, 11, 0.24)'
+                : skinDef.id === 'abyssal_knight' || skinDef.id === 'arcane_archon'
+                  ? 'rgba(34, 211, 238, 0.22)'
+                  : skinDef.id === 'void_harbinger'
+                    ? 'rgba(99, 102, 241, 0.28)'
+                    : skinDef.id === 'seraph_bane'
+                      ? 'rgba(244, 63, 94, 0.24)'
+                      : 'rgba(124, 58, 237, 0.24)';
+            ctx.beginPath();
+            ctx.arc(0, 0, PLAYER_RADIUS + 8, 0, Math.PI * 2);
+            ctx.fill();
+          } else if (
+            skinDef.id === 'inferno_warden' ||
+            skinDef.id === 'immortal_phoenix' ||
+            skinDef.id === 'blood_sovereign' ||
+            skinDef.id === 'crimson_overlord' ||
+            skinDef.id === 'apocalypse_knight'
+          ) {
+            ctx.fillStyle =
+              skinDef.id === 'blood_sovereign' || skinDef.id === 'crimson_overlord'
+                ? 'rgba(225, 29, 72, 0.28)'
+                : 'rgba(249, 115, 22, 0.26)';
+            ctx.beginPath();
+            ctx.arc(0, 0, PLAYER_RADIUS + 8, 0, Math.PI * 2);
+            ctx.fill();
+          }
 
           // Shadow
           ctx.fillStyle = 'rgba(0,0,0,0.4)';
@@ -2798,6 +3860,63 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
 
           // Rotate toward aim
           ctx.rotate(p.aimAngle);
+
+          // Cape, wings, or shoulder pauldrons depending on equipped skin
+          if (
+            skinDef.id === 'seraph_bane' ||
+            skinDef.id === 'eclipse_valkyrie' ||
+            skinDef.id === 'immortal_phoenix' ||
+            skinDef.id === 'omnipotent_one'
+          ) {
+            ctx.fillStyle = skinDef.id === 'omnipotent_one' ? '#FEF08A' : skinDef.secondaryColor;
+            ctx.strokeStyle = skinDef.accentColor;
+            ctx.lineWidth = 1.4;
+            ctx.beginPath();
+            ctx.moveTo(-6, -8);
+            ctx.lineTo(-27, -21);
+            ctx.lineTo(-17, -4);
+            ctx.moveTo(-6, 8);
+            ctx.lineTo(-27, 21);
+            ctx.lineTo(-17, 4);
+            ctx.fill();
+            ctx.stroke();
+          } else if (
+            skinDef.id === 'crimson_hunter' ||
+            skinDef.id === 'shadow_reaper' ||
+            skinDef.id === 'angel_slayer' ||
+            skinDef.id === 'eternal_monarch' ||
+            skinDef.id === 'void_harbinger' ||
+            skinDef.id === 'crimson_overlord' ||
+            skinDef.id === 'blood_sovereign' ||
+            skinDef.id === 'galaxy_phantom'
+          ) {
+            ctx.fillStyle = skinDef.secondaryColor;
+            ctx.beginPath();
+            ctx.moveTo(-8, -14);
+            ctx.lineTo(-26, 0);
+            ctx.lineTo(-8, 14);
+            ctx.closePath();
+            ctx.fill();
+          } else if (
+            skinDef.id === 'titan_emerald' ||
+            skinDef.id === 'golden_champion' ||
+            skinDef.id === 'abyssal_knight' ||
+            skinDef.id === 'inferno_warden' ||
+            skinDef.id === 'arsenal_master' ||
+            skinDef.id === 'bone_emperor' ||
+            skinDef.id === 'warbanner_breaker' ||
+            skinDef.id === 'colossus_vanquisher' ||
+            skinDef.id === 'omega_forged' ||
+            skinDef.id === 'chronos_sentinel' ||
+            skinDef.id === 'arcane_archon' ||
+            skinDef.id === 'apocalypse_knight'
+          ) {
+            ctx.fillStyle = skinDef.secondaryColor;
+            ctx.beginPath();
+            ctx.roundRect(-14, -21, 14, 9, 3);
+            ctx.roundRect(-14, 12, 14, 9, 3);
+            ctx.fill();
+          }
 
           // Weapon barrel drawn based on active weapon
           const rx = -p.recoilOffset;
@@ -2828,18 +3947,81 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
             ctx.fillRect(16 + rx, -1.5, 22, 3);
           }
 
-          // Player armored body
-          ctx.fillStyle = p.hurtFlash > 0 ? '#EF4444' : '#E2E8F0';
+          // Player armored body (reflecting equipped skin)
+          ctx.fillStyle =
+            p.hurtFlash > 0
+              ? '#EF4444'
+              : p.stunTimer > 0
+                ? '#BEF264'
+                : skinDef.primaryColor;
           ctx.beginPath();
           ctx.arc(0, 0, PLAYER_RADIUS, 0, Math.PI * 2);
           ctx.fill();
 
-          ctx.strokeStyle = '#0F172A';
+          ctx.strokeStyle =
+            skinDef.id === 'celestial_god'
+              ? '#7C3AED'
+              : skinDef.id === 'eternal_monarch'
+                ? '#F43F5E'
+                : skinDef.tier === 'Leyenda'
+                  ? skinDef.accentColor
+                  : '#0F172A';
           ctx.lineWidth = 3;
           ctx.stroke();
 
+          // Horns / Crown / Crest / Cyber Trim
+          if (
+            skinDef.id === 'abyssal_knight' ||
+            skinDef.id === 'inferno_warden' ||
+            skinDef.id === 'bone_emperor' ||
+            skinDef.id === 'colossus_vanquisher' ||
+            skinDef.id === 'apocalypse_knight' ||
+            skinDef.id === 'blood_sovereign'
+          ) {
+            ctx.fillStyle = skinDef.accentColor;
+            ctx.beginPath();
+            ctx.moveTo(-8, -14);
+            ctx.lineTo(-15, -24);
+            ctx.lineTo(-2, -16);
+            ctx.moveTo(8, -14);
+            ctx.lineTo(15, -24);
+            ctx.lineTo(2, -16);
+            ctx.fill();
+          } else if (
+            skinDef.id === 'golden_champion' ||
+            skinDef.id === 'celestial_god' ||
+            skinDef.id === 'angel_slayer' ||
+            skinDef.id === 'eternal_monarch' ||
+            skinDef.id === 'seraph_bane' ||
+            skinDef.id === 'immortal_phoenix' ||
+            skinDef.id === 'crimson_overlord' ||
+            skinDef.id === 'eclipse_valkyrie' ||
+            skinDef.id === 'omnipotent_one'
+          ) {
+            ctx.fillStyle = skinDef.accentColor;
+            ctx.beginPath();
+            ctx.moveTo(-6, -15);
+            ctx.lineTo(0, -24);
+            ctx.lineTo(6, -15);
+            ctx.closePath();
+            ctx.fill();
+          } else if (
+            skinDef.id === 'cyber_raider' ||
+            skinDef.id === 'arsenal_master' ||
+            skinDef.id === 'warbanner_breaker' ||
+            skinDef.id === 'omega_forged' ||
+            skinDef.id === 'chronos_sentinel' ||
+            skinDef.id === 'arcane_archon'
+          ) {
+            ctx.strokeStyle = skinDef.visorColor;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(0, 0, PLAYER_RADIUS - 4, Math.PI * 0.75, Math.PI * 1.25);
+            ctx.stroke();
+          }
+
           // Tactical visor
-          ctx.fillStyle = wDef.color;
+          ctx.fillStyle = skinDef.id === 'sentinel' ? wDef.color : skinDef.visorColor;
           ctx.beginPath();
           ctx.arc(6, 0, 7, -Math.PI * 0.42, Math.PI * 0.42);
           ctx.lineTo(3, 0);
@@ -2847,6 +4029,28 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
           ctx.fill();
 
           ctx.restore();
+
+          // Stun stars & immobilization ring around player
+          if (p.stunTimer > 0) {
+            ctx.save();
+            const stunSpin = performance.now() * 0.008;
+            ctx.strokeStyle = 'rgba(190, 242, 100, 0.85)';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, PLAYER_RADIUS + 11, 0, Math.PI * 2);
+            ctx.stroke();
+
+            for (let sIdx = 0; sIdx < 3; sIdx++) {
+              const ang = stunSpin + (sIdx * Math.PI * 2) / 3;
+              const sx = p.x + Math.cos(ang) * 15;
+              const sy = p.y - PLAYER_RADIUS - 12 + Math.sin(ang) * 5;
+              ctx.fillStyle = '#FDE047';
+              ctx.beginPath();
+              ctx.arc(sx, sy, 3.2, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            ctx.restore();
+          }
 
           // Bleeding / slow crimson aura around player
           if (p.bleedTimer > 0) {
@@ -3002,7 +4206,16 @@ export const SlimeArenaCanvas = React.forwardRef<GameEngineHandle, SlimeArenaCan
         window.removeEventListener('mouseup', handleMouseUp);
         window.removeEventListener('wheel', handleWheel);
       };
-    }, [onGameOver, onHudUpdate, onLevelUp, onOpenArmory, onTogglePause]);
+    }, [
+      onDivineRevive,
+      onGameOver,
+      onHudUpdate,
+      onLevelUp,
+      onNewEnemyReveal,
+      onOpenArmory,
+      onProgressEvent,
+      onTogglePause,
+    ]);
 
     return (
       <canvas
